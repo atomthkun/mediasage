@@ -64,34 +64,73 @@ docker compose up -d
 
 ## NAS Deployment
 
+PlexSage is available as a pre-built Docker image: `ghcr.io/ecwilsonaz/plexsage:latest`
+
 ### Synology (Container Manager)
 
-1. SSH into your Synology or use Task Scheduler to run:
+**Option A: GUI Setup**
+
+1. Open **Container Manager** → **Registry** → Search for `ghcr.io/ecwilsonaz/plexsage`
+2. Download the `latest` tag
+3. Go to **Container** → **Create**
+4. Configure:
+   - **Port**: Local 8765 → Container 8765
+   - **Environment**:
+     - `PLEX_URL` = `http://your-nas-ip:32400`
+     - `PLEX_TOKEN` = your token
+     - `GEMINI_API_KEY` = your key (or ANTHROPIC/OPENAI)
+
+**Option B: Docker Compose**
+
+1. SSH into your Synology:
 ```bash
-mkdir -p /volume1/docker/plexsage
-cd /volume1/docker/plexsage
+mkdir -p /volume1/docker/plexsage && cd /volume1/docker/plexsage
 curl -O https://raw.githubusercontent.com/ecwilsonaz/plexsage/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/ecwilsonaz/plexsage/main/.env.example
+mv .env.example .env
+nano .env  # Edit with your credentials
 ```
 
 2. In **Container Manager** → **Project** → **Create**:
-   - Set path to `/volume1/docker/plexsage`
-   - Add environment variables (PLEX_URL, PLEX_TOKEN, your LLM API key)
-
-3. Or use the GUI to create a container directly:
-   - Image: `ghcr.io/ecwilsonaz/plexsage:latest`
-   - Port: 8765 → 8765
-   - Environment: Add your credentials
+   - Path: `/volume1/docker/plexsage`
+   - Source: Use existing docker-compose.yml
 
 ### Unraid
 
-Use Community Apps or add container manually:
-- Repository: `ghcr.io/ecwilsonaz/plexsage:latest`
-- Port mapping: 8765
-- Add environment variables for PLEX_URL, PLEX_TOKEN, and your LLM API key
+1. Go to **Docker** → **Add Container**
+2. Configure:
+   - **Repository**: `ghcr.io/ecwilsonaz/plexsage:latest`
+   - **Port**: 8765 → 8765
+   - **Variables**:
+     - `PLEX_URL` = `http://your-unraid-ip:32400`
+     - `PLEX_TOKEN` = your token
+     - `GEMINI_API_KEY` = your key
+
+### TrueNAS SCALE
+
+1. **Apps** → **Discover Apps** → **Custom App**
+2. Configure:
+   - **Image**: `ghcr.io/ecwilsonaz/plexsage`
+   - **Tag**: `latest`
+   - **Port**: 8765
+   - **Environment Variables**: Add PLEX_URL, PLEX_TOKEN, and your LLM API key
 
 ### Portainer
 
-**Stacks** → **Add Stack** → paste docker-compose.yml contents, add environment variables.
+1. **Stacks** → **Add Stack**
+2. Paste:
+```yaml
+services:
+  plexsage:
+    image: ghcr.io/ecwilsonaz/plexsage:latest
+    ports:
+      - "8765:8765"
+    environment:
+      - PLEX_URL=http://your-server:32400
+      - PLEX_TOKEN=your-token
+      - GEMINI_API_KEY=your-key
+    restart: unless-stopped
+```
 
 ## LLM Providers
 
