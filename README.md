@@ -28,7 +28,7 @@ PlexSage offers two ways to begin creating a playlist:
 - "Upbeat instrumental jazz for a dinner party"
 - "Late night electronic music, nothing too aggressive"
 
-The AI analyzes your request and suggests appropriate genre and decade filters from your library.
+The AI first analyzes your request and suggests appropriate genre and decade filters. Your prompt is saved and sent again later along with the filtered track list for final curation.
 
 <!-- ![Prompt Input Screenshot](docs/images/screenshot-prompt.png) -->
 
@@ -69,11 +69,12 @@ The UI automatically adjusts available options based on your configured model.
 ### Step 4: Generate & Review
 
 Hit generate and watch the progress indicators as PlexSage:
-1. Fetches matching tracks from your library
-2. Sends them to the AI with your prompt
-3. Matches AI selections back to your library
+1. Fetches tracks matching your filters from Plex
+2. Sends your original prompt + the filtered track list to the AI
+3. AI selects tracks that best match your request
+4. Selections are fuzzy-matched back to your library
 
-Review your playlist, remove any tracks you don't want, rename it, and see the actual token count and cost for the session.
+The AI sees both what you asked for *and* what's available—so it makes informed choices from tracks you actually own. Review your playlist, remove any tracks you don't want, rename it, and see the actual token count and cost for the session.
 
 <!-- ![Results Screenshot](docs/images/screenshot-results.png) -->
 
