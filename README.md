@@ -19,61 +19,79 @@ If you've ever been frustrated by AI recommendations for music you don't have, P
 
 ## Features
 
-### Prompt-Based Playlist Generation
+### Step 1: Choose How to Start
 
-Describe the mood, era, or vibe you're looking for in natural language. PlexSage understands requests like:
+PlexSage offers two ways to begin creating a playlist:
+
+**Option A: Describe what you want** — Enter a natural language prompt like:
 - "Melancholy 90s alternative for a rainy day"
 - "Upbeat instrumental jazz for a dinner party"
 - "Late night electronic music, nothing too aggressive"
 
-The AI analyzes your prompt and suggests appropriate genre and decade filters from your library, then curates a playlist that matches your request.
+The AI analyzes your request and suggests appropriate genre and decade filters from your library.
 
 <!-- ![Prompt Input Screenshot](docs/images/screenshot-prompt.png) -->
 
-### Seed Track Discovery
-
-Start from a song you love and explore in different directions. Select a track from your library and PlexSage identifies its musical dimensions—mood, era, instrumentation, genre influences, lyrical themes, and more. Choose which dimensions to explore and discover similar music you might have forgotten you owned.
+**Option B: Start from a song you love** — Search for a track in your library and PlexSage analyzes its musical dimensions: mood, era, instrumentation, genre influences, lyrical themes, and more. Select which dimensions to explore and discover similar music you might have forgotten you owned.
 
 <!-- ![Seed Track Screenshot](docs/images/screenshot-seed.png) -->
 
-### Smart Library Filtering
+### Step 2: Refine Your Filters
 
-Before the AI generates anything, you control exactly what pool of tracks it can choose from:
+Before the AI sees anything, you control exactly what pool of tracks it can choose from:
 
 - **Genres** — Select one or many from your library's actual genres
 - **Decades** — Filter by era (60s, 70s, 80s, etc.)
 - **Minimum Rating** — Only include tracks you've rated 3+ stars, 4+ stars, etc.
 - **Exclude Live Versions** — Automatically filter out concert recordings
-- **Track Limits** — Control how many tracks are sent to the AI (cost vs. variety tradeoff)
 
-See exactly how many tracks match your filters and the estimated cost before generating.
+The filter screen shows exactly how many tracks match your selection in real-time.
 
 <!-- ![Filters Screenshot](docs/images/screenshot-filters.png) -->
 
-### Real Cost Transparency
+### Step 3: Control Cost & Variety
 
-PlexSage shows you exactly what you're spending:
-- **Before generation**: Estimated token count and cost based on your filters
-- **After generation**: Actual tokens used and total cost for the session
-- **Model awareness**: Costs displayed per your configured LLM provider
+Choose how many tracks to send to the AI:
 
-No surprises. You always know what a playlist costs before you create it.
+- **Fewer tracks** (100-500) — Lower cost, faster generation, good for focused playlists
+- **More tracks** (1,000-5,000) — Higher variety, better for broad requests
+- **Maximum** (up to 18,000 with Gemini) — Full library exploration
 
-### Context-Aware Limits
+PlexSage shows estimated cost before you generate. Different LLMs have different limits:
+- Gemini: ~18,000 tracks (1M context)
+- Claude: ~3,500 tracks (200K context)
+- GPT-4: ~2,300 tracks (128K context)
 
-Different LLMs have different context windows. PlexSage automatically adjusts:
-- Gemini (1M context): Can process ~18,000 tracks at once
-- Claude (200K context): Handles ~3,500 tracks
-- GPT-4 (128K context): Works with ~2,300 tracks
+The UI automatically adjusts available options based on your configured model.
 
-The UI adapts to show appropriate limit options for your configured model. Large libraries are randomly sampled to fit within limits while maintaining variety.
+<!-- ![Cost Preview Screenshot](docs/images/screenshot-cost.png) -->
+
+### Step 4: Generate & Review
+
+Hit generate and watch the progress indicators as PlexSage:
+1. Fetches matching tracks from your library
+2. Sends them to the AI with your prompt
+3. Matches AI selections back to your library
+
+Review your playlist, remove any tracks you don't want, rename it, and see the actual token count and cost for the session.
+
+<!-- ![Results Screenshot](docs/images/screenshot-results.png) -->
+
+### Step 5: Save to Plex
+
+One click saves your playlist directly to Plex, ready to play in Plexamp or any Plex client.
+
+---
 
 ### Multi-Provider Support
 
 Bring your own API key from any supported provider:
-- **Google Gemini** — Lowest cost, largest context window
-- **Anthropic Claude** — Nuanced understanding, quality recommendations
-- **OpenAI GPT** — Reliable, solid all-around performance
+
+| Provider | Max Tracks | Cost | Notes |
+|----------|------------|------|-------|
+| **Google Gemini** | ~18,000 | Lowest | Best for large libraries |
+| **Anthropic Claude** | ~3,500 | Medium | Nuanced recommendations |
+| **OpenAI GPT** | ~2,300 | Medium | Solid all-around |
 
 PlexSage auto-detects your provider based on which API key you configure.
 
