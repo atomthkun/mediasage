@@ -3,10 +3,12 @@
 import yaml
 
 from backend.config import (
+    deep_merge,
+    get_env_or_yaml,
     load_config,
     load_yaml_config,
-    get_env_or_yaml,
     MODEL_DEFAULTS,
+    remove_empty_values,
 )
 
 
@@ -247,3 +249,88 @@ class TestLoadConfig:
         # (actual masking would be in a different layer if needed)
         assert config.plex.token == "secret-token"
         assert config.llm.api_key == "secret-api-key"
+
+
+class TestDeepMerge:
+    """Tests for deep_merge utility function."""
+
+    def test_merges_flat_dicts(self):
+        """Should merge flat dictionaries."""
+        base = {"a": 1, "b": 2}
+        override = {"b": 20, "c": 3}
+
+        result = deep_merge(base, override)
+
+        assert result == {"a": 1, "b": 20, "c": 3}
+
+    def test_merges_nested_dicts(self):
+        """Should recursively merge nested dictionaries."""
+        base = {"a": {"b": 1, "c": 2}, "d": 4}
+        override = {"a": {"b": 10}}
+
+        result = deep_merge(base, override)
+
+        assert result == {"a": {"b": 10, "c": 2}, "d": 4}
+
+    def test_override_replaces_non_dict_with_dict(self):
+        """Should replace non-dict value with dict if override is dict."""
+        base = {"a": 1}
+        override = {"a": {"nested": True}}
+
+        result = deep_merge(base, override)
+
+        assert result == {"a": {"nested": True}}
+
+    def test_does_not_modify_original(self):
+        """Should not modify the original dictionaries."""
+        base = {"a": {"b": 1}}
+        override = {"a": {"c": 2}}
+
+        deep_merge(base, override)
+
+        assert base == {"a": {"b": 1}}
+        assert override == {"a": {"c": 2}}
+
+
+class TestRemoveEmptyValues:
+    """Tests for remove_empty_values utility function."""
+
+    def test_removes_empty_strings(self):
+        """Should remove keys with empty string values."""
+        d = {"a": "", "b": "value", "c": ""}
+
+        result = remove_empty_values(d)
+
+        assert result == {"b": "value"}
+
+    def test_removes_none_values(self):
+        """Should remove keys with None values."""
+        d = {"a": None, "b": "value", "c": None}
+
+        result = remove_empty_values(d)
+
+        assert result == {"b": "value"}
+
+    def test_preserves_other_falsy_values(self):
+        """Should preserve 0 and False values."""
+        d = {"a": 0, "b": False, "c": "value"}
+
+        result = remove_empty_values(d)
+
+        assert result == {"a": 0, "b": False, "c": "value"}
+
+    def test_removes_empty_nested_dicts(self):
+        """Should remove nested dicts that become empty."""
+        d = {"a": {"b": "", "c": None}, "d": "value"}
+
+        result = remove_empty_values(d)
+
+        assert result == {"d": "value"}
+
+    def test_preserves_non_empty_nested_dicts(self):
+        """Should preserve nested dicts with values."""
+        d = {"a": {"b": "", "c": "nested"}, "d": "value"}
+
+        result = remove_empty_values(d)
+
+        assert result == {"a": {"c": "nested"}, "d": "value"}

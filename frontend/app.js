@@ -737,6 +737,59 @@ function updateSettings() {
         state.config.llm_configured ? 'Configured' : 'Not configured';
 }
 
+function updateConfigRequiredUI() {
+    const plexConnected = state.config?.plex_connected ?? false;
+    const llmConfigured = state.config?.llm_configured ?? false;
+
+    // Elements that require configuration
+    const analyzeBtn = document.getElementById('analyze-prompt-btn');
+    const continueBtn = document.getElementById('continue-to-filters-btn');
+    const searchBtn = document.getElementById('search-tracks-btn');
+    const searchInput = document.getElementById('track-search-input');
+    const promptTextarea = document.querySelector('.prompt-textarea');
+
+    // Hints
+    const hintPrompt = document.getElementById('llm-required-hint-prompt');
+    const hintDimensions = document.getElementById('llm-required-hint-dimensions');
+    const hintSeed = document.getElementById('llm-required-hint-seed');
+
+    // Determine what's missing
+    const needsPlex = !plexConnected;
+    const needsLLM = !llmConfigured;
+    const needsConfig = needsPlex || needsLLM;
+
+    // Update button/input states
+    if (analyzeBtn) analyzeBtn.disabled = needsConfig;
+    if (continueBtn) continueBtn.disabled = needsLLM; // Only needs LLM at this point
+    if (searchBtn) searchBtn.disabled = needsPlex;
+    if (searchInput) searchInput.disabled = needsPlex;
+    if (promptTextarea) promptTextarea.disabled = needsPlex;
+
+    // Build hint message based on what's missing
+    let hintMessage = '';
+    if (needsPlex && needsLLM) {
+        hintMessage = '<a href="#" data-view="settings">Configure Plex and an LLM provider</a> to continue';
+    } else if (needsPlex) {
+        hintMessage = '<a href="#" data-view="settings">Connect to Plex</a> to continue';
+    } else if (needsLLM) {
+        hintMessage = '<a href="#" data-view="settings">Configure an LLM provider</a> to continue';
+    }
+
+    // Update hint content and visibility
+    [hintPrompt, hintSeed].forEach(hint => {
+        if (hint) {
+            hint.innerHTML = hintMessage;
+            hint.hidden = !needsConfig;
+        }
+    });
+
+    // Dimensions hint only needs LLM (Plex is already connected at this step)
+    if (hintDimensions) {
+        hintDimensions.innerHTML = needsLLM ? '<a href="#" data-view="settings">Configure an LLM provider</a> to continue' : '';
+        hintDimensions.hidden = !needsLLM;
+    }
+}
+
 function updateFooter() {
     const footerModel = document.getElementById('footer-model');
     if (footerModel && state.config) {
@@ -755,10 +808,9 @@ function updateFooter() {
             } else {
                 footerModel.textContent = state.config.llm_provider;
             }
-        } else if (state.config.llm_provider) {
-            footerModel.textContent = state.config.llm_provider;
         } else {
-            footerModel.textContent = 'not configured';
+            // Not configured - show "not configured" regardless of provider selection
+            footerModel.textContent = 'llm not configured';
         }
     }
 }
@@ -883,6 +935,17 @@ function setupEventListeners() {
                 loadSettings();
             }
         });
+    });
+
+    // Settings links in hints (use event delegation for dynamically inserted links)
+    document.body.addEventListener('click', e => {
+        const link = e.target.closest('.llm-required-hint a[data-view]');
+        if (link) {
+            e.preventDefault();
+            state.view = link.dataset.view;
+            updateView();
+            loadSettings();
+        }
     });
 
     // Mode tabs
@@ -1076,6 +1139,16 @@ function renderSearchResults(tracks) {
 }
 
 async function selectSeedTrack(ratingKey, tracks) {
+    // Check if services are configured before proceeding
+    if (!state.config?.plex_connected) {
+        showError('Connect to Plex in Settings first');
+        return;
+    }
+    if (!state.config?.llm_configured) {
+        showError('Configure an LLM provider in Settings to analyze tracks');
+        return;
+    }
+
     const track = tracks.find(t => t.rating_key === ratingKey);
     if (!track) return;
 
@@ -1296,6 +1369,7 @@ async function loadSettings() {
 
         updateSettings();
         updateFooter();
+        updateConfigRequiredUI();
 
         // Show library stats if connected
         if (state.config.plex_connected) {
@@ -1344,6 +1418,7 @@ async function handleSaveSettings() {
         state.config = await updateConfig(updates);
         updateSettings();
         updateFooter();
+        updateConfigRequiredUI();
         showSuccess('Settings saved!');
 
         // Clear password fields after save

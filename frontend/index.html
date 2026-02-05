@@ -75,6 +75,9 @@
                         <button id="analyze-prompt-btn" class="btn btn-primary">
                             Analyze
                         </button>
+                        <p id="llm-required-hint-prompt" class="llm-required-hint" hidden>
+                            <a href="#" data-view="settings">Configure an LLM provider</a> to continue
+                        </p>
                     </div>
 
                     <!-- Input Step (Seed Mode) -->
@@ -92,6 +95,9 @@
                             <button id="search-tracks-btn" class="btn btn-secondary">Search</button>
                         </div>
                         <div id="search-results" class="search-results" role="listbox" aria-label="Search results"></div>
+                        <p id="llm-required-hint-seed" class="llm-required-hint" hidden>
+                            <a href="#" data-view="settings">Configure an LLM provider</a> to select tracks
+                        </p>
                     </div>
 
                     <!-- Dimensions Step (Seed Mode Only) -->
@@ -112,6 +118,9 @@
                         <button id="continue-to-filters-btn" class="btn btn-primary">
                             Continue to Filters
                         </button>
+                        <p id="llm-required-hint-dimensions" class="llm-required-hint" hidden>
+                            <a href="#" data-view="settings">Configure an LLM provider</a> to continue
+                        </p>
                     </div>
 
                     <!-- Filters Step -->

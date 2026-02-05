@@ -325,6 +325,21 @@ textarea {
     cursor: not-allowed;
 }
 
+.llm-required-hint {
+    margin-top: var(--spacing-sm);
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
+.llm-required-hint a {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+.llm-required-hint a:hover {
+    color: var(--accent-hover);
+}
+
 .btn-secondary {
     background: var(--bg-tertiary);
     color: var(--text-primary);

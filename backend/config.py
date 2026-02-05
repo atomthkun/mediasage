@@ -12,6 +12,33 @@ from backend.models import AppConfig, DefaultsConfig, LLMConfig, PlexConfig
 # Load .env file (if it exists) - env vars take priority
 load_dotenv()
 
+# User config file path (for UI-saved settings)
+USER_CONFIG_PATH = Path("config.user.yaml")
+
+
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge override into base."""
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def remove_empty_values(d: dict[str, Any]) -> dict[str, Any]:
+    """Remove keys with empty string or None values, recursively."""
+    result: dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            nested = remove_empty_values(v)
+            if nested:  # Only include non-empty dicts
+                result[k] = nested
+        elif v not in (None, ""):
+            result[k] = v
+    return result
+
 
 # Default model mappings per provider
 MODEL_DEFAULTS = {
@@ -42,6 +69,27 @@ def load_yaml_config(config_path: Path | None = None) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def load_user_yaml_config() -> dict[str, Any]:
+    """Load user configuration from config.user.yaml."""
+    if not USER_CONFIG_PATH.exists():
+        return {}
+    with open(USER_CONFIG_PATH) as f:
+        return yaml.safe_load(f) or {}
+
+
+def save_user_config(updates: dict[str, Any]) -> None:
+    """Save user configuration to config.user.yaml.
+
+    Only saves non-empty values. Preserves existing user config.
+    """
+    existing = load_user_yaml_config()
+    merged = deep_merge(existing, updates)
+    cleaned = remove_empty_values(merged)
+
+    with open(USER_CONFIG_PATH, "w") as f:
+        yaml.dump(cleaned, f, default_flow_style=False)
+
+
 def get_env_or_yaml(
     env_key: str, yaml_value: Any, default: Any = None
 ) -> Any:
@@ -55,14 +103,19 @@ def get_env_or_yaml(
 
 
 def load_config(config_path: Path | None = None) -> AppConfig:
-    """Load configuration with environment variable priority.
+    """Load configuration with priority chain.
 
     Priority order:
     1. Environment variables (highest)
-    2. config.yaml file
-    3. Default values (lowest)
+    2. config.user.yaml (UI-saved settings)
+    3. config.yaml file
+    4. Default values (lowest)
     """
     yaml_config = load_yaml_config(config_path)
+    user_config = load_user_yaml_config()
+
+    # Merge: user config overrides base yaml config
+    yaml_config = deep_merge(yaml_config, user_config)
 
     # Extract nested config sections
     plex_yaml = yaml_config.get("plex", {})
@@ -160,10 +213,10 @@ def refresh_config(config_path: Path | None = None) -> AppConfig:
 
 
 def update_config_values(updates: dict[str, Any]) -> AppConfig:
-    """Update specific configuration values in memory.
+    """Update configuration values and persist to config.user.yaml.
 
-    Note: This does not persist changes to the YAML file.
-    For Docker deployments, changes come via environment variables.
+    Changes are saved to config.user.yaml so they survive server restarts.
+    Environment variables still take priority over saved settings.
     """
     global _config
     if _config is None:
@@ -218,5 +271,15 @@ def update_config_values(updates: dict[str, Any]) -> AppConfig:
         llm=new_llm,
         defaults=_config.defaults,
     )
+
+    # Persist to user config file
+    user_updates: dict[str, Any] = {}
+    if plex_updates:
+        user_updates["plex"] = plex_updates
+    if llm_updates:
+        user_updates["llm"] = llm_updates
+
+    if user_updates:
+        save_user_config(user_updates)
 
     return _config

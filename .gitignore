@@ -59,6 +59,7 @@ Thumbs.db
 # Configuration with secrets (keep example)
 config.yaml
 config.yml
+config.user.yaml
 !config.example.yaml
 !config.example.yml
 
