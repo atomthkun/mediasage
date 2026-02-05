@@ -47,6 +47,9 @@ const state = {
 
     // Config
     config: null,
+
+    // Cached filter preview (for local cost recalculation)
+    lastFilterPreview: null,  // { matching_tracks, tracks_to_send }
 };
 
 // =============================================================================
@@ -533,17 +536,17 @@ function updateTrackLimitButtons() {
     container.innerHTML = options.map(limit => {
         const isActive = limit === state.maxTracksToAI ||
             (limit === 0 && state.maxTracksToAI >= maxAllowed);
-        const label = limit === 0 ? `All (${maxAllowed.toLocaleString()})` : limit.toLocaleString();
+        const label = limit === 0 ? `Max (${maxAllowed.toLocaleString()})` : limit.toLocaleString();
         return `<button class="limit-btn ${isActive ? 'active' : ''}" data-limit="${limit}">${label}</button>`;
     }).join('');
 
-    // Re-attach event listeners
+    // Re-attach event listeners (local recalculation - no API call needed)
     container.querySelectorAll('.limit-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const limit = parseInt(btn.dataset.limit);
             state.maxTracksToAI = limit === 0 ? maxAllowed : limit;
             updateFilters();
-            updateFilterPreview();
+            recalculateCostDisplay();
         });
     });
 }
@@ -575,26 +578,80 @@ async function updateFilterPreview() {
 
         const data = await response.json();
 
-        // Update both displays
-        let trackText;
-        if (data.matching_tracks >= 0) {
-            if (data.tracks_to_send < data.matching_tracks) {
-                trackText = `${data.matching_tracks.toLocaleString()} tracks (sending ${data.tracks_to_send.toLocaleString()} to AI)`;
-            } else {
-                trackText = `${data.matching_tracks.toLocaleString()} tracks`;
-            }
-        } else {
-            trackText = 'Unknown';
-        }
-        const costText = `Est. cost: $${data.estimated_cost.toFixed(4)}`;
+        // Cache the matching_tracks for local recalculation
+        state.lastFilterPreview = {
+            matching_tracks: data.matching_tracks,
+        };
 
-        previewTracks.textContent = trackText;
-        previewCost.textContent = costText;
+        // Update display
+        updateFilterPreviewDisplay(data.matching_tracks, data.tracks_to_send, data.estimated_cost);
     } catch (error) {
         console.error('Filter preview error:', error);
         previewTracks.textContent = '-- matching tracks';
         previewCost.textContent = 'Est. cost: --';
     }
+}
+
+function updateFilterPreviewDisplay(matchingTracks, tracksToSend, estimatedCost) {
+    const previewTracks = document.getElementById('preview-tracks');
+    const previewCost = document.getElementById('preview-cost');
+
+    // Update track count display
+    let trackText;
+    if (matchingTracks >= 0) {
+        if (tracksToSend < matchingTracks) {
+            trackText = `${matchingTracks.toLocaleString()} tracks (sending ${tracksToSend.toLocaleString()} to AI, selected randomly)`;
+        } else {
+            trackText = `${matchingTracks.toLocaleString()} tracks`;
+        }
+    } else {
+        trackText = 'Unknown';
+    }
+    previewTracks.textContent = trackText;
+    previewCost.textContent = `Est. cost: $${estimatedCost.toFixed(4)}`;
+
+    // Update "All/Max" button label based on whether filtered tracks fit in context
+    const maxBtn = document.querySelector('.limit-btn[data-limit="0"]');
+    if (maxBtn && state.config) {
+        const maxAllowed = state.config.max_tracks_to_ai || 3500;
+        maxBtn.textContent = matchingTracks <= maxAllowed ? 'All' : `Max (${maxAllowed.toLocaleString()})`;
+    }
+}
+
+function recalculateCostDisplay() {
+    // Recalculate cost locally without API call (for track_count/max_tracks changes)
+    if (!state.lastFilterPreview || !state.config) return;
+
+    // If cost rates aren't available (old config), fall back to API call
+    if (state.config.cost_per_million_input === undefined) {
+        updateFilterPreview();
+        return;
+    }
+
+    const { matching_tracks } = state.lastFilterPreview;
+    const maxAllowed = state.config.max_tracks_to_ai || 3500;
+
+    // Calculate tracks_to_send
+    let tracks_to_send;
+    if (matching_tracks <= 0) {
+        tracks_to_send = 0;
+    } else if (state.maxTracksToAI === 0 || state.maxTracksToAI >= maxAllowed) {
+        // "Max" mode - send up to model's limit
+        tracks_to_send = Math.min(matching_tracks, maxAllowed);
+    } else {
+        tracks_to_send = Math.min(matching_tracks, state.maxTracksToAI);
+    }
+
+    // Cost formula (same as backend)
+    const input_tokens = 500 + (tracks_to_send * 50);
+    const output_tokens = state.trackCount * 30;
+
+    // Use cost rates from config
+    const input_cost = (input_tokens / 1_000_000) * state.config.cost_per_million_input;
+    const output_cost = (output_tokens / 1_000_000) * state.config.cost_per_million_output;
+    const estimated_cost = input_cost + output_cost;
+
+    updateFilterPreviewDisplay(matching_tracks, tracks_to_send, estimated_cost);
 }
 
 function updatePlaylist() {
@@ -850,12 +907,12 @@ function setupEventListeners() {
         updateFilterPreview();
     });
 
-    // Track count
+    // Track count (local recalculation - no API call needed)
     document.querySelectorAll('.count-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             state.trackCount = parseInt(btn.dataset.count);
             updateFilters();
-            updateFilterPreview();
+            recalculateCostDisplay();
         });
     });
 

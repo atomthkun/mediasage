@@ -135,17 +135,19 @@ def is_live_version(track: Any) -> bool:
     """Check if track appears to be a live recording.
 
     Args:
-        track: Plex track object
+        track: Plex track object (raw Plex object or Track model)
 
     Returns:
         True if track appears to be a live version
     """
-    album_title = ""
-    if callable(getattr(track, 'album', None)):
+    # Use parentTitle first - it's already cached on the track object
+    # This avoids a network call per track (track.album() does HTTP request)
+    album_title = getattr(track, 'parentTitle', '') or ''
+
+    # Only call track.album() if parentTitle is empty and album() exists
+    if not album_title and callable(getattr(track, 'album', None)):
         album = track.album()
         album_title = album.title if album else ""
-    elif hasattr(track, 'parentTitle'):
-        album_title = track.parentTitle or ""
 
     track_title = track.title
 
@@ -310,24 +312,7 @@ class PlexClient:
             return []
 
         try:
-            # Build Plex filter kwargs for efficient server-side filtering
-            filters = {}
-
-            if genres:
-                filters['genre'] = genres
-
-            if decades:
-                decade_values = []
-                for d in decades:
-                    if d.endswith('s'):
-                        decade_values.append(d[:-1])
-                    else:
-                        decade_values.append(d)
-                if decade_values:
-                    filters['decade'] = decade_values
-
-            if min_rating > 0:
-                filters['userRating>>='] = min_rating
+            filters = self._build_filters(genres, decades, min_rating)
 
             # Fetch tracks with server-side filters
             plex_tracks = self._library.search(libtype="track", **filters)
@@ -347,7 +332,7 @@ class PlexClient:
         decades: list[str] | None = None,
         min_rating: int = 0,
     ) -> int:
-        """Get count of tracks matching filter criteria.
+        """Get count of tracks matching filter criteria (without live filtering).
 
         Args:
             genres: List of genre names to include
@@ -361,40 +346,97 @@ class PlexClient:
             return 0
 
         try:
-            # Build Plex filter kwargs
-            filters = {}
-
-            if genres:
-                # Plex uses 'genre' filter with genre names
-                filters['genre'] = genres
-
-            if decades:
-                # Convert decades like "1980s" to decade values "1980"
-                decade_values = []
-                for d in decades:
-                    if d.endswith('s'):
-                        decade_values.append(d[:-1])
-                    else:
-                        decade_values.append(d)
-                if decade_values:
-                    filters['decade'] = decade_values
-
-            if min_rating > 0:
-                # Filter for tracks with rating >= min_rating
-                # Plex uses '>>=' for greater-than-or-equal
-                filters['userRating>>='] = min_rating
+            filters = self._build_filters(genres, decades, min_rating)
 
             # If no filters, return total track count (fast path)
             if not filters:
                 return self._library.totalViewSize(libtype="track")
 
             # Search and count results
-            # Note: This fetches metadata for all matching tracks but doesn't
-            # convert them, so it's reasonably fast for count purposes
             results = self._library.search(libtype="track", **filters)
             return len(results)
         except Exception:
             return -1
+
+    def count_tracks_by_filters(
+        self,
+        genres: list[str] | None = None,
+        decades: list[str] | None = None,
+        exclude_live: bool = True,
+        min_rating: int = 0,
+    ) -> int:
+        """Count matching tracks without converting to Track objects.
+
+        This is faster than get_tracks_by_filters() when only the count is needed.
+
+        Args:
+            genres: List of genre names to include
+            decades: List of decades (e.g., ["1990s", "2000s"])
+            exclude_live: Whether to exclude live recordings
+            min_rating: Minimum user rating (0-10, 0 = no filter)
+
+        Returns:
+            Count of matching tracks, or -1 on error
+        """
+        if not self._library:
+            return -1
+
+        try:
+            filters = self._build_filters(genres, decades, min_rating)
+
+            # Fast path: no filters and not excluding live
+            if not filters and not exclude_live:
+                return self._library.totalViewSize(libtype="track")
+
+            # Get raw Plex tracks (no conversion to Track objects)
+            plex_tracks = self._library.search(libtype="track", **filters)
+
+            if exclude_live:
+                # Count non-live tracks without full conversion
+                # is_live_version uses parentTitle which is already cached
+                return sum(1 for t in plex_tracks if not is_live_version(t))
+
+            return len(plex_tracks)
+        except Exception as e:
+            logger.exception("Failed to count tracks with filters: %s", e)
+            return -1
+
+    def _build_filters(
+        self,
+        genres: list[str] | None = None,
+        decades: list[str] | None = None,
+        min_rating: int = 0,
+    ) -> dict[str, Any]:
+        """Build Plex filter kwargs from filter parameters.
+
+        Args:
+            genres: List of genre names to include
+            decades: List of decades (e.g., ["1990s", "2000s"])
+            min_rating: Minimum user rating (0-10, 0 = no filter)
+
+        Returns:
+            Dict of filter kwargs for Plex search
+        """
+        filters = {}
+
+        if genres:
+            filters['genre'] = genres
+
+        if decades:
+            # Convert decades like "1980s" to decade values "1980"
+            decade_values = []
+            for d in decades:
+                if d.endswith('s'):
+                    decade_values.append(d[:-1])
+                else:
+                    decade_values.append(d)
+            if decade_values:
+                filters['decade'] = decade_values
+
+        if min_rating > 0:
+            filters['userRating>>='] = min_rating
+
+        return filters
 
     def get_genres(self) -> list[dict[str, Any]]:
         """Get list of genres with track counts."""

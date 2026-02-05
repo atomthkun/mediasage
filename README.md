@@ -333,7 +333,7 @@ pytest tests/ -v
 
 - **Backend:** Python 3.11+, FastAPI, python-plexapi, rapidfuzz
 - **Frontend:** Vanilla HTML/CSS/JS (no build step)
-- **LLM SDKs:** anthropic, openai, google-generativeai
+- **LLM SDKs:** anthropic, openai, google-genai
 - **Deployment:** Docker
 
 ---

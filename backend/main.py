@@ -30,12 +30,13 @@ from backend.models import (
     Track,
     UpdateConfigRequest,
 )
-from backend.plex_client import get_plex_client, init_plex_client, get_track_cache
+from backend.plex_client import get_plex_client, init_plex_client
 from backend.llm_client import (
     get_llm_client,
     init_llm_client,
     get_max_tracks_for_model,
     estimate_cost_for_model,
+    MODEL_COSTS,
 )
 from backend.analyzer import analyze_prompt as do_analyze_prompt, analyze_track as do_analyze_track
 from backend.generator import generate_playlist as do_generate_playlist, generate_playlist_stream
@@ -109,6 +110,9 @@ async def get_configuration() -> ConfigResponse:
     analysis_model = config.llm.model_analysis
     max_tracks = get_max_tracks_for_model(generation_model)
 
+    # Get cost rates for generation model (for client-side cost calculation)
+    costs = MODEL_COSTS.get(generation_model, {"input": 1.0, "output": 2.0})
+
     return ConfigResponse(
         plex_url=config.plex.url,
         plex_connected=plex_client.is_connected() if plex_client else False,
@@ -120,6 +124,8 @@ async def get_configuration() -> ConfigResponse:
         model_analysis=analysis_model,
         model_generation=generation_model,
         max_tracks_to_ai=max_tracks,
+        cost_per_million_input=costs["input"],
+        cost_per_million_output=costs["output"],
         defaults=config.defaults,
     )
 
@@ -158,6 +164,9 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
     analysis_model = config.llm.model_analysis
     max_tracks = get_max_tracks_for_model(generation_model)
 
+    # Get cost rates for generation model (for client-side cost calculation)
+    costs = MODEL_COSTS.get(generation_model, {"input": 1.0, "output": 2.0})
+
     return ConfigResponse(
         plex_url=config.plex.url,
         plex_connected=plex_client.is_connected() if plex_client else False,
@@ -169,6 +178,8 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
         model_analysis=analysis_model,
         model_generation=generation_model,
         max_tracks_to_ai=max_tracks,
+        cost_per_million_input=costs["input"],
+        cost_per_million_output=costs["output"],
         defaults=config.defaults,
     )
 
@@ -253,10 +264,13 @@ async def analyze_track(request: AnalyzeTrackRequest) -> AnalyzeTrackResponse:
 
 @app.post("/api/filter/preview", response_model=FilterPreviewResponse)
 async def preview_filters(request: FilterPreviewRequest) -> FilterPreviewResponse:
-    """Preview filter results with track count and cost estimate."""
+    """Preview filter results with track count and cost estimate.
+
+    Uses count-only method for fast preview. Full track fetching is deferred
+    to the generate endpoint where the user expects a longer wait.
+    """
     plex_client = get_plex_client()
     config = get_config()
-    track_cache = get_track_cache()
 
     if not plex_client or not plex_client.is_connected():
         raise HTTPException(status_code=503, detail="Plex not connected")
@@ -266,34 +280,14 @@ async def preview_filters(request: FilterPreviewRequest) -> FilterPreviewRespons
     exclude_live = True  # Always exclude live for preview/generate
     min_rating = request.min_rating
 
-    # Only use caching when filters are applied (avoids fetching entire library)
-    has_filters = genres or decades or min_rating > 0
-
-    if has_filters:
-        # Check cache first
-        cached_tracks = track_cache.get(genres, decades, exclude_live, min_rating)
-
-        if cached_tracks is not None:
-            matching_tracks = len(cached_tracks)
-        else:
-            # Fetch full tracks and cache them (so generate can reuse)
-            tracks = await asyncio.to_thread(
-                plex_client.get_tracks_by_filters,
-                genres=genres,
-                decades=decades,
-                exclude_live=exclude_live,
-                min_rating=min_rating,
-            )
-            track_cache.set(genres, decades, exclude_live, min_rating, tracks)
-            matching_tracks = len(tracks)
-    else:
-        # No filters - just count, don't fetch entire library
-        matching_tracks = await asyncio.to_thread(
-            plex_client.get_filtered_track_count,
-            genres=genres,
-            decades=decades,
-            min_rating=min_rating,
-        )
+    # Use count-only method (no full track conversion) for fast preview
+    matching_tracks = await asyncio.to_thread(
+        plex_client.count_tracks_by_filters,
+        genres=genres,
+        decades=decades,
+        exclude_live=exclude_live,
+        min_rating=min_rating,
+    )
 
     # Calculate how many tracks will actually be sent to AI
     if matching_tracks <= 0:

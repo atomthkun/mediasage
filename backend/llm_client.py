@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import anthropic
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 import openai
 
 from backend.models import LLMConfig
@@ -99,8 +100,7 @@ class LLMClient:
         elif config.provider == "openai":
             self._client = openai.OpenAI(api_key=config.api_key)
         elif config.provider == "gemini":
-            genai.configure(api_key=config.api_key)
-            self._client = genai  # Store the module reference
+            self._client = genai.Client(api_key=config.api_key)
 
     def _complete_anthropic(
         self, prompt: str, system: str, model: str
@@ -147,27 +147,65 @@ class LLMClient:
         )
 
     def _complete_gemini(
-        self, prompt: str, system: str, model: str
+        self, prompt: str, system: str, model: str, max_retries: int = 3
     ) -> LLMResponse:
-        """Make a completion request to Google Gemini."""
-        logger.debug("Creating Gemini model: %s", model)
-        gemini_model = self._client.GenerativeModel(
-            model_name=model,
-            system_instruction=system,
-        )
+        """Make a completion request to Google Gemini with retry logic.
 
-        logger.info("Calling Gemini API with %d char prompt", len(prompt))
-        response = gemini_model.generate_content(prompt)
-        logger.debug("Gemini response received")
+        Gemini 2.5 models have a known issue where responses can be truncated
+        due to internal "thinking" consuming output tokens. We retry on
+        truncation (MAX_TOKENS finish reason) or empty responses.
+        """
+        last_error = None
 
-        # Extract token counts from usage metadata
-        usage = response.usage_metadata
-        return LLMResponse(
-            content=response.text,
-            input_tokens=usage.prompt_token_count,
-            output_tokens=usage.candidates_token_count,
-            model=model,
-        )
+        for attempt in range(max_retries):
+            logger.info("Calling Gemini API (attempt %d/%d) with %d char prompt",
+                       attempt + 1, max_retries, len(prompt))
+
+            response = self._client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system,
+                    # Don't set max_output_tokens - let the model use what it needs
+                    # This avoids truncation from thinking token consumption
+                ),
+            )
+
+            # Check finish reason
+            finish_reason = None
+            if response.candidates:
+                finish_reason = response.candidates[0].finish_reason
+
+            # Extract content
+            usage = response.usage_metadata
+            content = response.text if response.text else ""
+
+            logger.info("Gemini response: %d chars, finish_reason=%s, output_tokens=%d",
+                       len(content), finish_reason, usage.candidates_token_count if usage else 0)
+
+            # Check for truncation or empty response
+            if finish_reason == genai_types.FinishReason.MAX_TOKENS:
+                logger.warning("Gemini response truncated (MAX_TOKENS), attempt %d/%d",
+                             attempt + 1, max_retries)
+                last_error = "Response truncated due to MAX_TOKENS"
+                continue
+
+            if not content or len(content.strip()) < 10:
+                logger.warning("Gemini returned empty/minimal response, attempt %d/%d",
+                             attempt + 1, max_retries)
+                last_error = "Empty or minimal response"
+                continue
+
+            # Success - return the response
+            return LLMResponse(
+                content=content,
+                input_tokens=usage.prompt_token_count if usage else 0,
+                output_tokens=usage.candidates_token_count if usage else 0,
+                model=model,
+            )
+
+        # All retries exhausted
+        raise RuntimeError(f"Gemini API failed after {max_retries} attempts: {last_error}")
 
     def _complete(self, prompt: str, system: str, model: str) -> LLMResponse:
         """Make a completion request to the configured provider."""

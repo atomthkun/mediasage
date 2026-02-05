@@ -270,6 +270,8 @@ class ConfigResponse(BaseModel):
     model_analysis: str  # The analysis model being used
     model_generation: str  # The generation model being used
     max_tracks_to_ai: int  # Recommended max tracks for this model
+    cost_per_million_input: float  # Cost per million input tokens for generation model
+    cost_per_million_output: float  # Cost per million output tokens for generation model
     defaults: DefaultsConfig
 
 
