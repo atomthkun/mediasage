@@ -1332,7 +1332,13 @@ function updateFooterLibraryStatus(status) {
     trackCount.textContent = `${status.track_count.toLocaleString()} tracks`;
 
     if (status.is_syncing) {
-        syncTime.textContent = 'Syncing...';
+        // Show percentage if we have progress on processing_tracks phase
+        if (status.sync_progress?.phase === 'processing_tracks' && status.sync_progress.total > 0) {
+            const pct = Math.round((status.sync_progress.current / status.sync_progress.total) * 100);
+            syncTime.textContent = `Syncing ${pct}%`;
+        } else {
+            syncTime.textContent = 'Syncing...';
+        }
     } else {
         syncTime.textContent = formatRelativeTime(status.synced_at);
     }
@@ -1391,6 +1397,8 @@ function startSyncPolling() {
 
             if (status.is_syncing && status.sync_progress) {
                 updateSyncProgress(status.sync_progress.phase, status.sync_progress.current, status.sync_progress.total);
+                // Update footer with progress percentage for background syncs
+                updateFooterLibraryStatus(status);
             } else if (!status.is_syncing) {
                 // Sync completed
                 stopSyncPolling();
