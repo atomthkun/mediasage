@@ -212,10 +212,15 @@ class LLMClient:
         content = response.content.strip()
 
         # Try to extract JSON from markdown code blocks
-        # Handles ```json, ```JSON, ``` with any language specifier, or plain ```
-        match = re.search(r"```(?:\w+)?\s*\n?(.*?)```", content, re.DOTALL)
-        if match:
-            content = match.group(1).strip()
+        # Prefer ```json blocks first, then fall back to any code block
+        json_match = re.search(r"```json\s*\n?(.*?)```", content, re.DOTALL | re.IGNORECASE)
+        if json_match:
+            content = json_match.group(1).strip()
+        else:
+            # Fall back to first code block if no json block found
+            match = re.search(r"```(?:\w+)?\s*\n?(.*?)```", content, re.DOTALL)
+            if match:
+                content = match.group(1).strip()
 
         try:
             return json.loads(content)

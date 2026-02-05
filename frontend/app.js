@@ -148,9 +148,11 @@ function updateView() {
 }
 
 function updateMode() {
-    // Update mode tabs
+    // Update mode tabs (class and ARIA state)
     document.querySelectorAll('.mode-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.mode === state.mode);
+        const isActive = tab.dataset.mode === state.mode;
+        tab.classList.toggle('active', isActive);
+        tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
     });
 
     // Update step panels visibility
