@@ -277,11 +277,11 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
         }
     };
 
-    // Timeout handling - 10 minutes for local providers, 60 seconds for cloud
+    // Timeout handling - 10 minutes for local providers, 5 minutes for cloud
     let timeoutId = null;
     let abortController = new AbortController();
     const isLocalProvider = state.config?.is_local_provider ?? false;
-    const TIMEOUT_MS = isLocalProvider ? 600000 : 180000;  // 10 min vs 3 min
+    const TIMEOUT_MS = isLocalProvider ? 600000 : 300000;  // 10 min vs 5 min
 
     function resetTimeout() {
         if (timeoutId) clearTimeout(timeoutId);
