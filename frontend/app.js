@@ -1349,10 +1349,13 @@ async function checkLibraryStatus() {
         if (status.track_count === 0 && status.plex_connected && !status.is_syncing) {
             await startFirstTimeSync();
         } else if (status.is_syncing) {
-            // Already syncing - show modal and poll
-            showSyncModal();
-            if (status.sync_progress) {
-                updateSyncProgress(status.sync_progress.phase, status.sync_progress.current, status.sync_progress.total);
+            // Only show blocking modal for first-time sync (empty cache)
+            // Background refreshes poll silently
+            if (status.track_count === 0) {
+                showSyncModal();
+                if (status.sync_progress) {
+                    updateSyncProgress(status.sync_progress.phase, status.sync_progress.current, status.sync_progress.total);
+                }
             }
             startSyncPolling();
         }
