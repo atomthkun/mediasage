@@ -97,6 +97,15 @@ Before the AI sees anything, you control the pool:
 
 Real-time track counts show exactly how your filters narrow results.
 
+### Local Library Cache
+
+MediaSage syncs your Plex library to a local SQLite database. After a one-time sync (~2 min for 18,000 tracks), all library operations—filtering by genre, counting tracks, sending to AI—happen locally in milliseconds instead of waiting on Plex.
+
+- **First run** shows a progress modal while syncing
+- **Footer status** shows track count and last sync time
+- **Auto-refresh** keeps cache current (syncs if >24h stale)
+- **Manual refresh** available anytime
+
 ### Cost Control
 
 Choose how many tracks to send to the AI:
@@ -222,6 +231,8 @@ services:
       - PLEX_URL=http://your-server:32400
       - PLEX_TOKEN=your-token
       - GEMINI_API_KEY=your-key
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped
 ```
 
@@ -401,6 +412,8 @@ Interactive documentation available at `/docs` when running.
 | `/api/health` | GET | Health check |
 | `/api/config` | GET/POST | Get or update configuration |
 | `/api/library/stats` | GET | Library statistics |
+| `/api/library/status` | GET | Cache state, track count, sync progress |
+| `/api/library/sync` | POST | Trigger background library sync |
 | `/api/analyze/prompt` | POST | Analyze natural language prompt |
 | `/api/generate` | POST | Generate playlist |
 | `/api/playlist` | POST | Save playlist to Plex |

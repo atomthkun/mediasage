@@ -37,7 +37,9 @@ services:
       #- CUSTOM_LLM_URL=https://openrouter.ai/api/v1
       #- CUSTOM_LLM_API_KEY=sk-or-your-key
       #- CUSTOM_CONTEXT_WINDOW=32768
-    # Optional: persist UI settings (uncomment to enable)
-    # volumes:
-    #   - ./config.user.yaml:/app/config.user.yaml
+    volumes:
+      # Persist library cache across restarts
+      - ./data:/app/data
+      # Optional: persist UI settings
+      # - ./config.user.yaml:/app/config.user.yaml
     restart: unless-stopped
