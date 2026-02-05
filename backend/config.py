@@ -181,7 +181,27 @@ def update_config_values(updates: dict[str, Any]) -> AppConfig:
         plex_updates["music_library"] = updates["music_library"]
 
     if "llm_provider" in updates and updates["llm_provider"]:
-        llm_updates["provider"] = updates["llm_provider"]
+        new_provider = updates["llm_provider"]
+        llm_updates["provider"] = new_provider
+
+        # Auto-select API key from environment if provider changed and no key provided
+        if not updates.get("llm_api_key"):
+            env_keys = {
+                "anthropic": os.environ.get("ANTHROPIC_API_KEY", ""),
+                "openai": os.environ.get("OPENAI_API_KEY", ""),
+                "gemini": os.environ.get("GEMINI_API_KEY", ""),
+            }
+            if env_keys.get(new_provider):
+                llm_updates["api_key"] = env_keys[new_provider]
+
+        # Auto-select default models for new provider
+        if new_provider in MODEL_DEFAULTS:
+            defaults = MODEL_DEFAULTS[new_provider]
+            if not updates.get("model_analysis"):
+                llm_updates["model_analysis"] = defaults["analysis"]
+            if not updates.get("model_generation"):
+                llm_updates["model_generation"] = defaults["generation"]
+
     if "llm_api_key" in updates and updates["llm_api_key"]:
         llm_updates["api_key"] = updates["llm_api_key"]
     if "model_analysis" in updates and updates["model_analysis"]:

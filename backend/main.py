@@ -266,22 +266,34 @@ async def preview_filters(request: FilterPreviewRequest) -> FilterPreviewRespons
     exclude_live = True  # Always exclude live for preview/generate
     min_rating = request.min_rating
 
-    # Check cache first
-    cached_tracks = track_cache.get(genres, decades, exclude_live, min_rating)
+    # Only use caching when filters are applied (avoids fetching entire library)
+    has_filters = genres or decades or min_rating > 0
 
-    if cached_tracks is not None:
-        matching_tracks = len(cached_tracks)
+    if has_filters:
+        # Check cache first
+        cached_tracks = track_cache.get(genres, decades, exclude_live, min_rating)
+
+        if cached_tracks is not None:
+            matching_tracks = len(cached_tracks)
+        else:
+            # Fetch full tracks and cache them (so generate can reuse)
+            tracks = await asyncio.to_thread(
+                plex_client.get_tracks_by_filters,
+                genres=genres,
+                decades=decades,
+                exclude_live=exclude_live,
+                min_rating=min_rating,
+            )
+            track_cache.set(genres, decades, exclude_live, min_rating, tracks)
+            matching_tracks = len(tracks)
     else:
-        # Fetch full tracks and cache them (so generate can reuse)
-        tracks = await asyncio.to_thread(
-            plex_client.get_tracks_by_filters,
+        # No filters - just count, don't fetch entire library
+        matching_tracks = await asyncio.to_thread(
+            plex_client.get_filtered_track_count,
             genres=genres,
             decades=decades,
-            exclude_live=exclude_live,
             min_rating=min_rating,
         )
-        track_cache.set(genres, decades, exclude_live, min_rating, tracks)
-        matching_tracks = len(tracks)
 
     # Calculate how many tracks will actually be sent to AI
     if matching_tracks <= 0:
