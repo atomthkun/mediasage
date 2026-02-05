@@ -14,7 +14,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +337,7 @@ def check_server_changed(current_server_id: str) -> bool:
 
 def sync_library(
     plex_client: Any,
-    on_progress: callable | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     """Sync tracks from Plex to local cache.
 
