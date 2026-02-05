@@ -268,10 +268,12 @@ async def preview_filters(request: FilterPreviewRequest) -> FilterPreviewRespons
     )
 
     # Calculate how many tracks will actually be sent to AI
-    if request.max_tracks_to_ai == 0:  # No limit
-        tracks_to_send = matching_tracks if matching_tracks > 0 else 0
+    if matching_tracks <= 0:
+        tracks_to_send = 0
+    elif request.max_tracks_to_ai == 0:  # No limit
+        tracks_to_send = matching_tracks
     else:
-        tracks_to_send = min(matching_tracks, request.max_tracks_to_ai) if matching_tracks > 0 else 0
+        tracks_to_send = min(matching_tracks, request.max_tracks_to_ai)
 
     # Estimate tokens for the generation request
     # Rough estimates: ~50 tokens per track in context, ~30 tokens per track in output

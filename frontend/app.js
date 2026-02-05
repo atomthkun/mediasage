@@ -565,14 +565,7 @@ function setupEventListeners() {
         });
     });
 
-    // Max tracks to AI limit
-    document.querySelectorAll('.limit-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            state.maxTracksToAI = parseInt(btn.dataset.limit);
-            updateFilters();
-            updateFilterPreview();
-        });
-    });
+    // Note: limit-btn listeners are set up dynamically in updateTrackLimitButtons()
 
     // Exclude live checkbox
     document.getElementById('exclude-live').addEventListener('change', e => {

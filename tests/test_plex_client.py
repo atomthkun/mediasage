@@ -1,9 +1,6 @@
 """Tests for Plex client."""
 
-import pytest
 from unittest.mock import MagicMock, patch
-
-from backend.models import Track
 
 
 class TestPlexClientConnection:

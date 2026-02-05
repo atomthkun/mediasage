@@ -4,21 +4,18 @@ import logging
 import re
 from typing import Any
 
-from plexapi.server import PlexServer
-
-logger = logging.getLogger(__name__)
 from plexapi.exceptions import NotFound, Unauthorized
-from rapidfuzz import fuzz
+from plexapi.server import PlexServer
 from requests.exceptions import ConnectionError, Timeout
 from unidecode import unidecode
 
 from backend.models import Track
 
+logger = logging.getLogger(__name__)
+
 
 class PlexQueryError(Exception):
     """Raised when a Plex library query fails."""
-
-    pass
 
 
 # Fuzzy matching threshold (0-100)

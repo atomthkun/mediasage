@@ -12,7 +12,6 @@
     --text-primary: #ffffff;
     --text-secondary: #a0a0a0;
     --text-muted: #666666;
-    --border-color: #3a3a3a;
     --border: #3a3a3a;
     --error: #e53935;
     --success: #43a047;
@@ -74,7 +73,7 @@ body {
     align-items: center;
     justify-content: space-between;
     padding: var(--spacing-md) 0;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border);
     margin-bottom: var(--spacing-lg);
 }
 
@@ -851,7 +850,7 @@ textarea {
     gap: var(--spacing-sm);
     padding: var(--spacing-xl) 0;
     margin-top: var(--spacing-xl);
-    border-top: 1px solid var(--border-color);
+    border-top: 1px solid var(--border);
     font-size: var(--font-size-sm);
     color: var(--text-muted);
 }

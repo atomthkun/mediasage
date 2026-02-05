@@ -1,7 +1,5 @@
 """Tests for LLM client."""
 
-import json
-import pytest
 from unittest.mock import MagicMock, patch
 
 
@@ -105,7 +103,7 @@ class TestLLMClientAnalyze:
             mock_anthropic.Anthropic.return_value = mock_client
 
             client = LLMClient(config)
-            result = client.analyze("test prompt", "system prompt")
+            client.analyze("test prompt", "system prompt")
 
             # Verify the analysis model was used
             call_args = mock_client.messages.create.call_args
@@ -139,7 +137,7 @@ class TestLLMClientGenerate:
             mock_anthropic.Anthropic.return_value = mock_client
 
             client = LLMClient(config)
-            result = client.generate("test prompt", "system prompt")
+            client.generate("test prompt", "system prompt")
 
             # Verify the generation model was used
             call_args = mock_client.messages.create.call_args
@@ -169,7 +167,7 @@ class TestLLMClientGenerate:
             mock_anthropic.Anthropic.return_value = mock_client
 
             client = LLMClient(config)
-            result = client.generate("test prompt", "system prompt")
+            client.generate("test prompt", "system prompt")
 
             # Verify the analysis model was used for generation
             call_args = mock_client.messages.create.call_args

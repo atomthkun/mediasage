@@ -4,8 +4,6 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch
 
-from backend.models import Track
-
 
 class TestPlaylistGeneration:
     """Tests for playlist generation."""
@@ -56,7 +54,7 @@ class TestPlaylistGeneration:
         """Should handle case when no tracks match filters."""
         from backend.generator import generate_playlist
 
-        with patch("backend.generator.get_llm_client") as mock_llm:
+        with patch("backend.generator.get_llm_client"):
             with patch("backend.generator.get_plex_client") as mock_plex:
                 mock_plex_client = MagicMock()
                 mock_plex_client.get_tracks_by_filters.return_value = []

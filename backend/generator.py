@@ -4,10 +4,10 @@ import logging
 import random
 
 from backend.llm_client import get_llm_client
-
-logger = logging.getLogger(__name__)
 from backend.models import GenerateResponse, Track
 from backend.plex_client import PlexQueryError, get_plex_client
+
+logger = logging.getLogger(__name__)
 
 
 GENERATION_SYSTEM = """You are a music curator creating a playlist from a user's music library.
