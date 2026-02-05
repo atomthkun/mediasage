@@ -1,6 +1,6 @@
 services:
   plexsage:
-    image: ecwilsonaz/plexsage:latest
+    image: ecwilson/plexsage:latest
     # Alternative registries:
     # image: ghcr.io/ecwilsonaz/plexsage:latest
     # To build locally instead, comment out 'image' and uncomment 'build':
