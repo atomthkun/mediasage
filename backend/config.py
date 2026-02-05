@@ -89,7 +89,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     elif anthropic_key:
         provider = "anthropic"
     else:
-        provider = "anthropic"  # Default
+        provider = "gemini"  # Default
 
     # Get API key based on provider
     if provider == "anthropic":
@@ -102,7 +102,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         api_key = llm_yaml.get("api_key", "")
 
     # Get model defaults for the provider
-    provider_defaults = MODEL_DEFAULTS.get(provider, MODEL_DEFAULTS["anthropic"])
+    provider_defaults = MODEL_DEFAULTS.get(provider, MODEL_DEFAULTS["gemini"])
 
     # Build configuration
     plex_config = PlexConfig(

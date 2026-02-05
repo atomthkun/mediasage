@@ -225,7 +225,7 @@ class TestLoadConfig:
         config = load_config(config_file)
 
         assert config.plex.music_library == "Music"
-        assert config.llm.provider == "anthropic"
+        assert config.llm.provider == "gemini"
         assert config.defaults.track_count == 25
 
     def test_secrets_not_exposed_in_repr(self, tmp_path, monkeypatch):

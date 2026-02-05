@@ -712,7 +712,7 @@ function updateSettings() {
 
     document.getElementById('plex-url').value = state.config.plex_url || '';
     document.getElementById('music-library').value = state.config.music_library || 'Music';
-    document.getElementById('llm-provider').value = state.config.llm_provider || 'anthropic';
+    document.getElementById('llm-provider').value = state.config.llm_provider || 'gemini';
 
     // Update token/key placeholders to indicate if configured
     const plexTokenInput = document.getElementById('plex-token');

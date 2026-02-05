@@ -12,16 +12,16 @@ plex:
   music_library: "Music"
 
 llm:
-  # LLM provider: "anthropic" or "openai"
-  provider: "anthropic"
-  # API key (override with ANTHROPIC_API_KEY or OPENAI_API_KEY env var)
+  # LLM provider: "anthropic", "openai", or "gemini"
+  provider: "gemini"
+  # API key (override with ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY env var)
   api_key: ""
   # Model for analysis (understanding prompts, extracting dimensions)
-  # Defaults: claude-sonnet-4-5-latest (Anthropic) or gpt-4.1 (OpenAI)
-  # model_analysis: "claude-sonnet-4-5-latest"
+  # Defaults: gemini-2.5-flash (Gemini), claude-sonnet-4-5-latest (Anthropic), gpt-4.1 (OpenAI)
+  # model_analysis: "gemini-2.5-flash"
   # Model for generation (selecting tracks from list)
-  # Defaults: claude-haiku-4-5-latest (Anthropic) or gpt-4.1-mini (OpenAI)
-  # model_generation: "claude-haiku-4-5-latest"
+  # Defaults: gemini-2.5-flash (Gemini), claude-haiku-4-5-latest (Anthropic), gpt-4.1-mini (OpenAI)
+  # model_generation: "gemini-2.5-flash"
   # Use the analysis model for generation too (higher quality, ~3-5x cost)
   smart_generation: false
 
