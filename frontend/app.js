@@ -281,7 +281,7 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
     let timeoutId = null;
     let abortController = new AbortController();
     const isLocalProvider = state.config?.is_local_provider ?? false;
-    const TIMEOUT_MS = isLocalProvider ? 600000 : 60000;  // 10 min vs 60s
+    const TIMEOUT_MS = isLocalProvider ? 600000 : 180000;  // 10 min vs 3 min
 
     function resetTimeout() {
         if (timeoutId) clearTimeout(timeoutId);
