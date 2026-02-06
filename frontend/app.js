@@ -420,6 +420,18 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                     if (buffer.trim().length > 0) {
                         console.warn('[MediaSage] Stream ended with unparsed buffer:', buffer);
                     }
+                    // iOS Safari fallback: if stream ended without complete event but we have tracks
+                    if (state.pendingTracks && state.pendingTracks.length > 0 && !progressQueue.completeData) {
+                        console.warn('[MediaSage] Stream ended without complete event, synthesizing completion with', state.pendingTracks.length, 'tracks');
+                        const syntheticComplete = {
+                            tracks: state.pendingTracks,
+                            track_count: state.pendingTracks.length,
+                            playlist_title: state.playlistTitle || 'Playlist',
+                            narrative: state.narrative || '',
+                        };
+                        state.pendingTracks = [];
+                        progressQueue.markComplete(syntheticComplete, onComplete);
+                    }
                     return;
                 }
 

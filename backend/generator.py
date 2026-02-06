@@ -332,6 +332,10 @@ def generate_playlist_stream(
         })
         logger.info("Complete event emitted successfully")
 
+        # Trailing padding to push complete event through network buffers (iOS Safari fix)
+        # SSE comments (lines starting with ':') are ignored by the parser but help flush buffers
+        yield ": heartbeat\n\n"
+
     except Exception as e:
         logger.exception("Error during playlist generation")
         yield emit("error", {"message": str(e)})
