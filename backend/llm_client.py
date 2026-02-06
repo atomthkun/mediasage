@@ -473,6 +473,7 @@ class LLMClient:
             # (trailing commas, unescaped quotes, single quotes, etc.)
             try:
                 repaired = repair_json(content, return_objects=True)
+                logger.debug("JSON repair succeeded for malformed LLM response")
                 return repaired
             except Exception:
                 pass  # Fall through to error

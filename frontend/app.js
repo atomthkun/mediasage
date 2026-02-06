@@ -379,7 +379,9 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
 
                 if (done) {
                     clearTimeoutHandler();
-                    console.log('[MediaSage] Stream done, buffer remaining:', buffer.length, 'chars');
+                    if (buffer.trim().length > 0) {
+                        console.warn('[MediaSage] Stream ended with unparsed buffer:', buffer);
+                    }
                     return;
                 }
 

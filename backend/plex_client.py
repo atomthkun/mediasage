@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import re
+import threading
 import time
 from typing import Any
 
@@ -163,6 +164,9 @@ def is_live_version(track: Any) -> bool:
 class PlexClient:
     """Client for interacting with Plex server."""
 
+    # Cooldown between reconnection attempts (seconds)
+    RECONNECT_COOLDOWN = 30
+
     def __init__(self, url: str, token: str, music_library: str = "Music"):
         """Initialize Plex client.
 
@@ -177,6 +181,8 @@ class PlexClient:
         self._server: PlexServer | None = None
         self._library = None
         self._error: str | None = None
+        self._last_reconnect_attempt: float = time.time()
+        self._reconnect_lock = threading.Lock()
         self._connect()
 
     def _connect(self) -> None:
@@ -210,7 +216,26 @@ class PlexClient:
             self._library = None
 
     def is_connected(self) -> bool:
-        """Check if connected to Plex server with valid library."""
+        """Check if connected to Plex server with valid library.
+
+        If not connected, attempts to reconnect (with cooldown to avoid hammering).
+        Thread-safe to prevent multiple simultaneous reconnection attempts.
+        """
+        if self._server is not None and self._library is not None:
+            return True
+
+        # Not connected - try to reconnect if cooldown has passed
+        now = time.time()
+        with self._reconnect_lock:
+            # Re-check connection inside lock (may have connected while waiting)
+            if self._server is not None and self._library is not None:
+                return True
+
+            if now - self._last_reconnect_attempt >= self.RECONNECT_COOLDOWN:
+                self._last_reconnect_attempt = now
+                logger.info("Attempting to reconnect to Plex server...")
+                self._connect()
+
         return self._server is not None and self._library is not None
 
     def get_machine_identifier(self) -> str | None:

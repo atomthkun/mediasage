@@ -55,6 +55,74 @@ class TestPlexClientConnection:
             assert "library" in client.get_error().lower() or "not found" in client.get_error().lower()
 
 
+class TestPlexClientReconnect:
+    """Tests for lazy reconnection with cooldown."""
+
+    def test_reconnect_attempted_when_disconnected(self, mocker):
+        """Should attempt reconnection when disconnected and cooldown passed."""
+        from backend.plex_client import PlexClient
+        from requests.exceptions import ConnectionError
+
+        # First connection fails
+        with patch("backend.plex_client.PlexServer", side_effect=ConnectionError("Connection refused")):
+            client = PlexClient("http://localhost:32400", "token", "Music")
+            assert client.is_connected() is False
+
+        # Now server is available - mock successful connection
+        mock_server = MagicMock()
+        mock_server.library.section.return_value = MagicMock()
+
+        with patch("backend.plex_client.PlexServer", return_value=mock_server):
+            # Force cooldown to be passed
+            client._last_reconnect_attempt = 0
+            assert client.is_connected() is True
+
+    def test_reconnect_respects_cooldown(self, mocker):
+        """Should not attempt reconnection if cooldown hasn't passed."""
+        from backend.plex_client import PlexClient
+        from requests.exceptions import ConnectionError
+
+        connect_count = 0
+        def mock_connect(*args, **kwargs):
+            nonlocal connect_count
+            connect_count += 1
+            raise ConnectionError("Connection refused")
+
+        with patch("backend.plex_client.PlexServer", side_effect=mock_connect):
+            client = PlexClient("http://localhost:32400", "token", "Music")
+            initial_count = connect_count
+
+            # Multiple is_connected() calls within cooldown should not retry
+            client.is_connected()
+            client.is_connected()
+            client.is_connected()
+
+            # Should only have the initial connection attempt
+            assert connect_count == initial_count
+
+    def test_reconnect_after_cooldown(self, mocker):
+        """Should retry connection after cooldown period."""
+        from backend.plex_client import PlexClient
+        from requests.exceptions import ConnectionError
+
+        connect_count = 0
+        def mock_connect(*args, **kwargs):
+            nonlocal connect_count
+            connect_count += 1
+            raise ConnectionError("Connection refused")
+
+        with patch("backend.plex_client.PlexServer", side_effect=mock_connect):
+            client = PlexClient("http://localhost:32400", "token", "Music")
+            initial_count = connect_count
+
+            # Simulate cooldown passed
+            client._last_reconnect_attempt = time.time() - client.RECONNECT_COOLDOWN - 1
+            client.is_connected()
+
+            # Should have attempted another connection
+            assert connect_count == initial_count + 1
+
+
 class TestPlexClientLibraryStats:
     """Tests for library statistics."""
 
