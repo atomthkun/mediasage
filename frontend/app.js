@@ -357,13 +357,22 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                 const lines = buffer.split('\n');
                 buffer = lines.pop(); // Keep incomplete line in buffer
 
+                // SSE parsing: accumulate data until blank line signals end of event.
+                // This prevents failures when large data lines are split across chunks.
+                // See: https://html.spec.whatwg.org/multipage/server-sent-events.html
                 let currentEvent = null;
+                let currentData = '';
                 for (const line of lines) {
                     if (line.startsWith('event: ')) {
                         currentEvent = line.slice(7);
-                    } else if (line.startsWith('data: ') && currentEvent) {
+                        currentData = '';
+                    } else if (line.startsWith('data: ')) {
+                        // Accumulate data (SSE can have multiple data: lines per event)
+                        currentData += line.slice(6);
+                    } else if (line === '' && currentEvent && currentData) {
+                        // Blank line = end of SSE event, now parse complete data
                         try {
-                            const data = JSON.parse(line.slice(6));
+                            const data = JSON.parse(currentData);
                             if (currentEvent === 'progress') {
                                 progressQueue.enqueue(data.step, data.message);
                             } else if (currentEvent === 'narrative') {
@@ -372,21 +381,37 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                                 state.narrative = data.narrative || '';
                                 state.trackReasons = data.track_reasons || {};
                                 state.userRequest = data.user_request || '';
+                                // Initialize tracks array for batched receiving
+                                state.pendingTracks = [];
                                 console.log('[MediaSage] Narrative received:', state.playlistTitle);
+                            } else if (currentEvent === 'tracks') {
+                                // Accumulate track batches
+                                if (data.batch && Array.isArray(data.batch)) {
+                                    state.pendingTracks = state.pendingTracks || [];
+                                    state.pendingTracks.push(...data.batch);
+                                    console.log('[MediaSage] Track batch received, total:', state.pendingTracks.length);
+                                }
                             } else if (currentEvent === 'complete') {
-                                console.log('[MediaSage] Complete event received:', JSON.stringify(data).substring(0, 200));
+                                console.log('[MediaSage] Complete event received, pending tracks:', state.pendingTracks?.length || 0);
                                 clearTimeoutHandler();
+                                // Merge accumulated tracks into complete data
+                                const completeData = {
+                                    ...data,
+                                    tracks: state.pendingTracks || data.tracks || [],
+                                };
+                                state.pendingTracks = [];
                                 // Wait for queue to drain before completing
-                                progressQueue.markComplete(data, onComplete);
+                                progressQueue.markComplete(completeData, onComplete);
                             } else if (currentEvent === 'error') {
                                 clearTimeoutHandler();
                                 progressQueue.reset();
                                 onError(new Error(data.message));
                             }
-                        } catch {
-                            // Ignore parse errors
+                        } catch (e) {
+                            console.error('[MediaSage] Failed to parse SSE event:', currentEvent, e);
                         }
                         currentEvent = null;
+                        currentData = '';
                     }
                 }
 

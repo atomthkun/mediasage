@@ -310,8 +310,26 @@ def generate_playlist_stream(
             yield emit("error", {"message": f"Failed to build response: {e}"})
             return
 
+        # Send tracks in batches to work around iOS Safari dropping large SSE events.
+        # Safari Mobile has undocumented buffering limits that can cause large events
+        # to be silently dropped. Batching keeps each event small (~2KB).
+        tracks_data = [t.model_dump(mode="json") for t in result.tracks]
+        batch_size = 5
+        for i in range(0, len(tracks_data), batch_size):
+            batch = tracks_data[i:i + batch_size]
+            logger.info("Emitting track batch %d-%d", i, i + len(batch))
+            yield emit("tracks", {"batch": batch, "index": i})
+
+        # Emit small complete event with just metadata
         logger.info("Emitting complete event")
-        yield emit("complete", result.model_dump(mode="json"))
+        yield emit("complete", {
+            "track_count": len(result.tracks),
+            "token_count": result.token_count,
+            "estimated_cost": result.estimated_cost,
+            "playlist_title": result.playlist_title,
+            "narrative": result.narrative,
+            "track_reasons": result.track_reasons,
+        })
         logger.info("Complete event emitted successfully")
 
     except Exception as e:
