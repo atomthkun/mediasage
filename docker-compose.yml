@@ -42,6 +42,7 @@ services:
       #- CUSTOM_CONTEXT_WINDOW=32768
     volumes:
       # Persist library cache across restarts
+      # Note: Directory must be writable by UID 1000 (or chmod 777)
       - ./data:/app/data
       # Optional: persist UI settings
       # - ./config.user.yaml:/app/config.user.yaml

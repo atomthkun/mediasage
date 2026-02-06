@@ -7,8 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Create a non-root user
-RUN groupadd -r mediasageappuser && useradd -r -g mediasageappuser mediasageappuser
+# Create a non-root user with specific UID for easier host permission matching
+RUN groupadd -r -g 1000 mediasageappuser && useradd -r -u 1000 -g mediasageappuser mediasageappuser
+
+# Create data directory with correct ownership (for volume mounts)
+RUN mkdir -p /app/data && chown mediasageappuser:mediasageappuser /app/data
 
 # Install dependencies
 COPY requirements.txt .
