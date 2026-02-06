@@ -197,19 +197,32 @@ const progressQueue = {
 
     // Mark as complete - will fire callback after queue drains
     markComplete(data, callback) {
+        console.log('[MediaSage] markComplete called, isProcessing:', this.isProcessing, 'queueLength:', this.messages.length);
         this.completeData = data;
         this.onComplete = callback;
         // If not processing, finish immediately
         if (!this.isProcessing && this.messages.length === 0) {
+            console.log('[MediaSage] Queue empty, finishing immediately');
             this.finish();
+        } else {
+            console.log('[MediaSage] Queue not empty or processing, waiting for drain');
+            // Fallback: if queue doesn't drain within 5 seconds, force finish
+            setTimeout(() => {
+                if (this.completeData && this.onComplete) {
+                    console.warn('[MediaSage] Queue drain timeout, forcing finish');
+                    this.finish();
+                }
+            }, 5000);
         }
     },
 
     processNext() {
+        console.log('[MediaSage] processNext called, queueLength:', this.messages.length, 'hasCompleteData:', !!this.completeData);
         if (this.messages.length === 0) {
             this.isProcessing = false;
             // If we have pending complete data, finish now
             if (this.completeData && this.onComplete) {
+                console.log('[MediaSage] Queue drained, calling finish');
                 this.finish();
             }
             return;
