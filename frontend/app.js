@@ -1321,19 +1321,28 @@ function formatRelativeTime(isoString) {
 function updateFooterLibraryStatus(status) {
     const container = document.getElementById('footer-library-status');
     const trackCount = document.getElementById('footer-track-count');
+    const trackSeparator = document.getElementById('footer-track-separator');
     const syncTime = document.getElementById('footer-sync-time');
 
-    if (!status || status.track_count === 0) {
+    if (!status || (status.track_count === 0 && !status.is_syncing)) {
         container.classList.add('hidden');
         return;
     }
 
     container.classList.remove('hidden');
-    trackCount.textContent = `${status.track_count.toLocaleString()} tracks`;
+    // Show track count, or hide it during sync when count is 0
+    if (status.track_count > 0) {
+        trackCount.textContent = `${status.track_count.toLocaleString()} tracks`;
+        trackCount.style.display = '';
+        trackSeparator.style.display = '';
+    } else if (status.is_syncing) {
+        trackCount.style.display = 'none';
+        trackSeparator.style.display = 'none';
+    }
 
     if (status.is_syncing) {
-        // Show percentage if we have progress on processing_tracks phase
-        if (status.sync_progress?.phase === 'processing_tracks' && status.sync_progress.total > 0) {
+        // Show percentage if we have progress on processing phase
+        if (status.sync_progress?.phase === 'processing' && status.sync_progress.total > 0) {
             const pct = Math.round((status.sync_progress.current / status.sync_progress.total) * 100);
             syncTime.textContent = `Syncing ${pct}%`;
         } else {
@@ -1355,9 +1364,9 @@ async function checkLibraryStatus() {
         if (status.track_count === 0 && status.plex_connected && !status.is_syncing) {
             await startFirstTimeSync();
         } else if (status.is_syncing) {
-            // Only show blocking modal for first-time sync (empty cache)
-            // Background refreshes poll silently
-            if (status.track_count === 0) {
+            // Only show blocking modal for first-time sync (no previous sync)
+            // Background refreshes (synced_at exists) poll silently
+            if (!status.synced_at) {
                 showSyncModal();
                 if (status.sync_progress) {
                     updateSyncProgress(status.sync_progress.phase, status.sync_progress.current, status.sync_progress.total);
