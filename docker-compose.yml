@@ -6,6 +6,8 @@ services:
     # To build locally instead, comment out 'image' and uncomment 'build':
     # build: .
     container_name: mediasage
+    # Optional: Run as specific user for NAS/Synology (use your PUID:PGID)
+    # user: "1000:1000"
     ports:
       - "5765:5765"
     environment:
@@ -42,7 +44,8 @@ services:
       #- CUSTOM_CONTEXT_WINDOW=32768
     volumes:
       # Persist library cache across restarts
-      # Note: Directory must be writable by UID 1000 (or chmod 777)
+      # Ensure directory is writable: either set 'user' above, or run:
+      #   mkdir -p ./data && chmod 777 ./data
       - ./data:/app/data
       # Optional: persist UI settings
       # - ./config.user.yaml:/app/config.user.yaml
