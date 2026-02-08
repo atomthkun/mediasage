@@ -30,7 +30,7 @@ MediaSage auto-detects Gemini when this key is set.
 
 MediaSage uses **Gemini 2.5 Flash** by default — fast, handles large track lists, and has the most generous free limits. Even at 100 requests/day, that's 100 playlists. Limits reset at midnight PT.
 
-All Gemini models support a 1M token context window. MediaSage sends ~500–650 tracks per request, well within this limit.
+All Gemini models support a 1M token context window. Gemini can handle up to ~18,000 tracks per request — far more than other providers.
 
 ---
 
