@@ -120,6 +120,8 @@ Bring your own API key—or run locally:
 
 ⚗️ *Local LLM support is experimental. [Report issues](https://github.com/ecwilsonaz/mediasage/issues).*
 
+> **Free option:** Google Gemini offers a free API tier that's more than enough for personal use — no credit card required. See the [Gemini free credit guide](docs/gemini-free-credit-guide.md) for setup instructions and details.
+
 Estimated cost displays before you generate. MediaSage auto-detects your provider based on which key you configure.
 
 ### Review and Save
