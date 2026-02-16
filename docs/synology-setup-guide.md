@@ -10,6 +10,8 @@ Before you start, gather these three things:
 
 1. **A Synology NAS with Container Manager installed.** Container Manager is a free app in Synology's Package Center (it used to be called "Docker"). If it's missing, open Package Center, search "Container Manager," and install it.
 
+   > **Don't have Container Manager?** Some Synology models (especially ARM-based units like the DS220j or DS223j) don't support it. You can still run MediaSage directly with Python — see the [Bare Metal install instructions](../README.md#bare-metal-no-docker) in the main README.
+
 2. **Your Plex token.** This lets MediaSage connect to your Plex server. See [Finding Your Plex Token](#finding-your-plex-token) below.
 
 3. **A Gemini API key (free).** MediaSage uses an AI service to build playlists. Google Gemini is free and requires no credit card. See [Getting a Gemini API Key](#getting-a-gemini-api-key-free) below.
@@ -107,33 +109,65 @@ docker/
 #### Step 2: Create the compose file
 
 1. On your computer, open a text editor (Notepad on Windows, TextEdit on Mac set to plain text)
-2. Paste the following, then replace the **four** placeholder values with your own:
+2. Paste the following — you'll replace the values in angle brackets `< >` with your own:
 
 ```yaml
 services:
   mediasage:
     image: ecwilson/mediasage:latest
     container_name: mediasage
-    user: "YOUR-UID:YOUR-GID"
+    user: "<UID>:<GID>"                            # Your Synology user and group ID
     ports:
       - "5765:5765"
     environment:
-      - PLEX_URL=http://YOUR-PLEX-IP:32400
-      - PLEX_TOKEN=YOUR-PLEX-TOKEN
-      - GEMINI_API_KEY=YOUR-GEMINI-KEY
+      - PLEX_URL=http://<PLEX_IP>:32400            # Your Plex server's IP address
+      - PLEX_TOKEN=<PLEX_TOKEN>                    # Your Plex token (long string)
+      - GEMINI_API_KEY=<GEMINI_KEY>                # Your Gemini API key
     volumes:
       - ./data:/app/data
     restart: unless-stopped
 ```
 
-**Replace these values:**
-- `YOUR-UID:YOUR-GID` — The numbers from [Finding Your Synology User ID](#finding-your-synology-user-id) (e.g., `"1026:100"`)
-- `YOUR-PLEX-IP` — Your Plex server's local IP address (e.g., `192.168.1.50`). See [Finding Your Plex Server's IP](#finding-your-plex-servers-ip) if unsure.
-- `YOUR-PLEX-TOKEN` — The token you found earlier
-- `YOUR-GEMINI-KEY` — The API key from Google AI Studio
+**Replace each `<placeholder>` with your actual value:**
 
-3. Save the file as `docker-compose.yml`
-4. In **File Station**, upload this file into the `docker/mediasage` folder you created
+| Placeholder | Replace with | Example |
+|---|---|---|
+| `<UID>` | Your Synology user ID number | `1026` |
+| `<GID>` | Your Synology group ID number | `100` |
+| `<PLEX_IP>` | Your Plex server's local IP address | `192.168.1.50` |
+| `<PLEX_TOKEN>` | Your Plex authentication token | `A1b2C3d4E5f6G7h8I9j0` |
+| `<GEMINI_KEY>` | Your Gemini API key from Google AI Studio | `AIzaSyB-1234abcd5678efgh` |
+
+See [Finding Your Synology User ID](#finding-your-synology-user-id) for UID/GID and [Finding Your Plex Server's IP](#finding-your-plex-servers-ip) for the Plex IP.
+
+> **Important:** Replace the placeholder *including* the angle brackets `< >`. For example, `<UID>` becomes `1026`, not `<1026>`. Everything to the left of the `=` sign (like `PLEX_TOKEN=`) must stay exactly as shown — only change what's to the right.
+
+**Example with real values** (yours will be different):
+
+```yaml
+services:
+  mediasage:
+    image: ecwilson/mediasage:latest
+    container_name: mediasage
+    user: "1026:100"
+    ports:
+      - "5765:5765"
+    environment:
+      - PLEX_URL=http://192.168.1.50:32400
+      - PLEX_TOKEN=A1b2C3d4E5f6G7h8I9j0
+      - GEMINI_API_KEY=AIzaSyB-1234abcd5678efgh
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+```
+
+3. **Verify your file before saving:**
+   - The `user:` line has two numbers separated by a colon (e.g., `"1026:100"`) — no letters
+   - Each environment line has a variable name, then `=`, then your value (e.g., `PLEX_TOKEN=A1b2...`)
+   - No angle brackets `< >` remain anywhere in the file
+
+4. Save the file as `docker-compose.yml`
+5. In **File Station**, upload this file into the `docker/mediasage` folder you created
 
 Your folder should now look like:
 ```
@@ -159,7 +193,11 @@ Container Manager will download the MediaSage image and start the container. The
 #### Step 4: Verify it's running
 
 1. In Container Manager → **Project**, you should see `mediasage` with a green "Running" status
-2. If it shows an error, see [Troubleshooting](#troubleshooting)
+2. Open your browser and go to `http://<your-synology-ip>:5765`
+3. Click **Settings** in the top navigation and confirm:
+   - **Plex Connection** shows a green status with your library name and track count
+   - **LLM Provider** shows a green status with "Gemini" configured
+4. If the container isn't running, see [Troubleshooting](#troubleshooting). If the container is green but Plex or the LLM shows disconnected in Settings, see [Container runs but Plex or LLM shows disconnected](#container-runs-but-plex-or-llm-shows-disconnected)
 
 ---
 
@@ -214,11 +252,11 @@ Under **Environment**, add these three variables:
 
 | Variable Name | Value |
 |---|---|
-| `PLEX_URL` | `http://YOUR-PLEX-IP:32400` |
-| `PLEX_TOKEN` | Your Plex token |
-| `GEMINI_API_KEY` | Your Gemini API key |
+| `PLEX_URL` | `http://<PLEX_IP>:32400` (e.g., `http://192.168.1.50:32400`) |
+| `PLEX_TOKEN` | Your Plex token (long string of letters and numbers) |
+| `GEMINI_API_KEY` | Your Gemini API key from Google AI Studio |
 
-Replace `YOUR-PLEX-IP` with your Plex server's local IP address.
+Replace `<PLEX_IP>` with your Plex server's local IP address.
 
 #### Step 7: Start the container
 
@@ -233,9 +271,9 @@ Replace `YOUR-PLEX-IP` with your Plex server's local IP address.
 Once the container runs:
 
 1. Open a web browser on any device connected to your home network
-2. Go to: **http://YOUR-SYNOLOGY-IP:5765**
+2. Go to: `http://<SYNOLOGY_IP>:5765`
 
-Replace `YOUR-SYNOLOGY-IP` with your Synology's local IP address (e.g., `http://192.168.1.100:5765`).
+Replace `<SYNOLOGY_IP>` with your Synology's local IP address (e.g., `http://192.168.1.100:5765`).
 
 > **Important:** Use your Synology's IP address, not `localhost` or `127.0.0.1`. Those work only when the app runs on the same machine as your browser. MediaSage runs on your Synology, so you must use the Synology's IP address.
 
@@ -342,6 +380,36 @@ If that still fails, the container may be running as a different user than your 
 - **Check your API key.** Open Container Manager, find the mediasage container, and verify the `GEMINI_API_KEY` environment variable is set and contains no extra spaces.
 - **Regenerate the key.** Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and create a new key. Replace the old one in your environment variables, then restart the container.
 
+### Container runs but Plex or LLM shows disconnected
+
+If the container starts successfully (green status in Container Manager) but the Settings page shows Plex or the LLM as disconnected, your `docker-compose.yml` likely has a formatting mistake. Open the file and check for these common issues:
+
+**Variable name was deleted.** Each environment line needs the variable name, an `=` sign, then your value:
+```
+Wrong:  - A1b2C3d4E5f6G7h8I9j0
+Right:  - PLEX_TOKEN=A1b2C3d4E5f6G7h8I9j0
+```
+
+**Angle brackets were left in.** Replace the entire placeholder including the `< >`:
+```
+Wrong:  - PLEX_TOKEN=<A1b2C3d4E5f6G7h8I9j0>
+Right:  - PLEX_TOKEN=A1b2C3d4E5f6G7h8I9j0
+```
+
+**Extra spaces around the `=` sign.** YAML environment variables cannot have spaces around `=`:
+```
+Wrong:  - PLEX_TOKEN = A1b2C3d4E5f6G7h8I9j0
+Right:  - PLEX_TOKEN=A1b2C3d4E5f6G7h8I9j0
+```
+
+**UID/GID still contains letters.** The `user:` line should have only numbers:
+```
+Wrong:  user: "1026:YOUR-100"
+Right:  user: "1026:100"
+```
+
+After fixing, re-upload `docker-compose.yml` and rebuild the project: Container Manager → **Project** → select `mediasage` → **Action** → **Build**.
+
 ### Library sync is slow or stuck
 
 - First sync takes 1-2 minutes for most libraries. Libraries with 50,000+ tracks may take longer.
@@ -362,8 +430,8 @@ MediaSage must reach your Plex server over the network. What you enter for `PLEX
 
 | Plex runs on... | PLEX_URL value |
 |---|---|
-| The same Synology NAS | `http://YOUR-SYNOLOGY-IP:32400` (not `localhost` — this fails from inside a container) |
-| Another computer on your LAN | `http://THAT-COMPUTERS-IP:32400` |
+| The same Synology NAS | `http://<SYNOLOGY_IP>:32400` (not `localhost` — this fails from inside a container) |
+| Another computer on your LAN | `http://<THAT_COMPUTERS_IP>:32400` |
 | A remote server | Your Plex server's external URL or IP |
 
 To find a computer's local IP:
