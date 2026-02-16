@@ -185,6 +185,8 @@ mv .env.example .env && nano .env
 ```
 Then in **Container Manager** → **Project** → **Create**, point to `/volume1/docker/mediasage`.
 
+**No Docker?** Some Synology models (especially ARM-based units) don't support Docker/Container Manager. See [Bare Metal](#bare-metal-no-docker) below for running MediaSage directly with Python.
+
 </details>
 
 <details>
@@ -225,6 +227,64 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+```
+
+</details>
+
+### Bare Metal (No Docker)
+
+Docker isn't required. MediaSage is Python + FastAPI with no native dependencies, so it runs on any machine with Python 3.11+ — including ARM-based Synology NAS models, Raspberry Pis, or any Linux/macOS/Windows box.
+
+```bash
+git clone https://github.com/ecwilsonaz/mediasage.git
+cd mediasage
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+Set your environment variables:
+
+```bash
+export PLEX_URL=http://your-plex-server:32400
+export PLEX_TOKEN=your-plex-token
+export GEMINI_API_KEY=your-gemini-key
+```
+
+Start the server:
+
+```bash
+uvicorn backend.main:app --host 0.0.0.0 --port 5765
+```
+
+Access at **http://your-machine-ip:5765**.
+
+<details>
+<summary><strong>Running as a background service (systemd)</strong></summary>
+
+To keep MediaSage running after you close your terminal, create a systemd service:
+
+```ini
+# /etc/systemd/system/mediasage.service
+[Unit]
+Description=MediaSage
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/mediasage
+EnvironmentFile=/path/to/mediasage/.env
+ExecStart=/path/to/mediasage/venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 5765
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable mediasage
+sudo systemctl start mediasage
 ```
 
 </details>
