@@ -2044,6 +2044,11 @@ body.no-scroll {
 }
 
 /* Responsive */
+/* Responsive button labels — short on mobile, long on desktop */
+.btn-label-short {
+    display: none;
+}
+
 @media (max-width: 600px) {
     .mode-tabs {
         flex-direction: column;
@@ -2057,4 +2062,11 @@ body.no-scroll {
         display: none;
     }
 
+    .btn-label-long {
+        display: none;
+    }
+
+    .btn-label-short {
+        display: inline;
+    }
 }

@@ -2772,17 +2772,17 @@ function setSaveMode(mode) {
     const pickerContainer = document.getElementById('playlist-picker-container');
 
     if (mode === 'new') {
-        saveBtn.textContent = 'Create Playlist';
+        saveBtn.innerHTML = '<span class="btn-label-long">Create Playlist</span><span class="btn-label-short">Save</span>';
         nameContainer.classList.remove('hidden');
         pickerContainer.classList.add('hidden');
     } else if (mode === 'replace') {
-        saveBtn.textContent = 'Replace all tracks';
+        saveBtn.innerHTML = '<span class="btn-label-long">Replace all tracks</span><span class="btn-label-short">Replace</span>';
         nameContainer.classList.add('hidden');
         pickerContainer.classList.remove('hidden');
         fetchAndPopulatePlaylists();
     } else if (mode === 'append') {
         const count = state.playlist.length;
-        saveBtn.textContent = `Add ${count} track${count !== 1 ? 's' : ''}`;
+        saveBtn.innerHTML = `<span class="btn-label-long">Add ${count} track${count !== 1 ? 's' : ''}</span><span class="btn-label-short">Append</span>`;
         nameContainer.classList.add('hidden');
         pickerContainer.classList.remove('hidden');
         fetchAndPopulatePlaylists();
