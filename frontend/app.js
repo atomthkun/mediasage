@@ -3,6 +3,63 @@
  */
 
 // =============================================================================
+// Focus Management (Accessibility)
+// =============================================================================
+
+const focusManager = {
+    _previousFocus: null,
+    _trapHandler: null,
+
+    /** Open a modal: save focus, move into modal, trap Tab within it */
+    openModal(modalEl) {
+        this._previousFocus = document.activeElement;
+
+        // Find focusable elements inside the modal
+        const focusable = this._getFocusable(modalEl);
+        if (focusable.length) {
+            // Focus the close button if present, otherwise first focusable
+            const closeBtn = modalEl.querySelector('.modal-close, .bottom-sheet-close');
+            requestAnimationFrame(() => (closeBtn || focusable[0]).focus());
+        }
+
+        // Trap Tab within modal
+        this._trapHandler = (e) => {
+            if (e.key !== 'Tab') return;
+            const els = this._getFocusable(modalEl);
+            if (!els.length) return;
+            const first = els[0];
+            const last = els[els.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener('keydown', this._trapHandler);
+    },
+
+    /** Close a modal: remove trap, restore previous focus */
+    closeModal() {
+        if (this._trapHandler) {
+            document.removeEventListener('keydown', this._trapHandler);
+            this._trapHandler = null;
+        }
+        if (this._previousFocus && typeof this._previousFocus.focus === 'function') {
+            this._previousFocus.focus();
+            this._previousFocus = null;
+        }
+    },
+
+    _getFocusable(el) {
+        return [...el.querySelectorAll(
+            'a[href], button:not([disabled]), textarea, input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )].filter(e => !e.closest('.hidden'));
+    }
+};
+
+// =============================================================================
 // State Management
 // =============================================================================
 
@@ -656,25 +713,43 @@ function updateStep() {
 }
 
 function updateFilters() {
+    // Remember which chip had focus so we can restore it after re-render
+    const focused = document.activeElement;
+    const focusedGenre = focused?.dataset?.genre;
+    const focusedDecade = focused?.dataset?.decade;
+
     // Update genre chips
     const genreContainer = document.getElementById('genre-chips');
-    genreContainer.innerHTML = state.availableGenres.map(genre => `
-        <button class="chip ${state.selectedGenres.includes(genre.name) ? 'selected' : ''}"
-                data-genre="${escapeHtml(genre.name)}">
+    genreContainer.innerHTML = state.availableGenres.map(genre => {
+        const isSelected = state.selectedGenres.includes(genre.name);
+        return `
+        <button class="chip ${isSelected ? 'selected' : ''}"
+                data-genre="${escapeHtml(genre.name)}"
+                aria-pressed="${isSelected}">
             ${escapeHtml(genre.name)}
             ${genre.count != null ? `<span class="chip-count">${genre.count}</span>` : ''}
         </button>
-    `).join('');
+    `}).join('');
 
     // Update decade chips
     const decadeContainer = document.getElementById('decade-chips');
-    decadeContainer.innerHTML = state.availableDecades.map(decade => `
-        <button class="chip ${state.selectedDecades.includes(decade.name) ? 'selected' : ''}"
-                data-decade="${escapeHtml(decade.name)}">
+    decadeContainer.innerHTML = state.availableDecades.map(decade => {
+        const isSelected = state.selectedDecades.includes(decade.name);
+        return `
+        <button class="chip ${isSelected ? 'selected' : ''}"
+                data-decade="${escapeHtml(decade.name)}"
+                aria-pressed="${isSelected}">
             ${escapeHtml(decade.name)}
             ${decade.count != null ? `<span class="chip-count">${decade.count}</span>` : ''}
         </button>
-    `).join('');
+    `}).join('');
+
+    // Restore focus to the chip that was active before re-render
+    if (focusedGenre) {
+        genreContainer.querySelector(`[data-genre="${CSS.escape(focusedGenre)}"]`)?.focus();
+    } else if (focusedDecade) {
+        decadeContainer.querySelector(`[data-decade="${CSS.escape(focusedDecade)}"]`)?.focus();
+    }
 
     // Update track count buttons
     document.querySelectorAll('.count-btn').forEach(btn => {
@@ -1036,7 +1111,8 @@ function openBottomSheet(ratingKey) {
 
     // Show sheet
     sheet.classList.remove('hidden');
-    document.body.classList.add('no-scroll');
+    focusManager.openModal(sheet);
+    lockScroll();
 }
 
 function closeBottomSheet() {
@@ -1045,6 +1121,7 @@ function closeBottomSheet() {
 
     sheet.classList.add('hidden');
     removeNoScrollIfNoModals();
+    focusManager.closeModal();
 }
 
 function updatePlaylist() {
@@ -1055,14 +1132,16 @@ function updatePlaylist() {
     container.innerHTML = state.playlist.map((track, index) => `
         <div class="playlist-track" role="option" tabindex="0"
              data-rating-key="${escapeHtml(track.rating_key)}"
-             aria-selected="false">
+             aria-selected="false"
+             aria-label="${escapeHtml(track.title)} by ${escapeHtml(track.artist)}">
             <span class="track-number">${index + 1}</span>
             ${trackArtHtml(track)}
             <div class="track-info">
                 <div class="track-title">${escapeHtml(track.title)}</div>
                 <div class="track-artist">${escapeHtml(track.artist)} - ${escapeHtml(track.album)}</div>
             </div>
-            <button class="track-remove" data-rating-key="${escapeHtml(track.rating_key)}">&times;</button>
+            <button class="track-remove" tabindex="0" data-rating-key="${escapeHtml(track.rating_key)}"
+                    aria-label="Remove ${escapeHtml(track.title)}">&times;</button>
         </div>
     `).join('');
 
@@ -1079,6 +1158,7 @@ function updatePlaylist() {
 
         // Keyboard: Enter/Space to select
         trackEl.addEventListener('keydown', (e) => {
+            if (e.target.closest('.track-remove')) return;
             if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 if (isMobileView()) {
@@ -1515,15 +1595,17 @@ function setLoading(loading, message = 'Loading...', substeps = null) {
     }
 
     overlay.classList.toggle('hidden', !loading);
-    document.body.classList.toggle('no-scroll', loading);
+    if (loading) { lockScroll(); } else { removeNoScrollIfNoModals(); }
     messageEl.textContent = message;
 
     const contentEl = overlay.querySelector('.loading-modal-content');
     if (substepEl) {
-        if (loading && substeps && substeps.length > 0) {
-            // Pre-measure the widest substep to prevent layout shifts
+        if (loading) {
+            // Pre-measure the widest possible text to prevent layout shifts.
+            // Include explicit substeps AND the AI cycling messages since
+            // streaming progress bypasses the substeps parameter.
             if (contentEl) {
-                const allTexts = [message, ...substeps];
+                const allTexts = [message, ...(substeps || []), ...progressQueue.aiMessages];
                 substepEl.style.visibility = 'hidden';
                 let maxWidth = contentEl.offsetWidth;
                 for (const text of allTexts) {
@@ -1534,17 +1616,21 @@ function setLoading(loading, message = 'Loading...', substeps = null) {
                 substepEl.style.visibility = '';
             }
 
-            // Show progressive substeps
-            let stepIndex = 0;
-            substepEl.textContent = substeps[0];
+            if (substeps && substeps.length > 0) {
+                // Show progressive substeps
+                let stepIndex = 0;
+                substepEl.textContent = substeps[0];
 
-            loadingIntervalId = setInterval(() => {
-                stepIndex++;
-                if (stepIndex < substeps.length) {
-                    substepEl.textContent = substeps[stepIndex];
-                }
-                // Stay on last step until done
-            }, 2000); // Change message every 2 seconds
+                loadingIntervalId = setInterval(() => {
+                    stepIndex++;
+                    if (stepIndex < substeps.length) {
+                        substepEl.textContent = substeps[stepIndex];
+                    }
+                    // Stay on last step until done
+                }, 2000); // Change message every 2 seconds
+            } else {
+                substepEl.textContent = '';
+            }
         } else {
             substepEl.textContent = '';
             if (contentEl) contentEl.style.minWidth = '';
@@ -1595,13 +1681,15 @@ function showSuccessModal(name, trackCount, playlistUrl) {
     }
 
     modal.classList.remove('hidden');
-    document.body.classList.add('no-scroll');
+    lockScroll();
+    focusManager.openModal(modal);
 }
 
 function dismissSuccessModal() {
     // Just hide the modal, don't reset state - user can continue with playlist
     document.getElementById('success-modal').classList.add('hidden');
     removeNoScrollIfNoModals();
+    focusManager.closeModal();
 }
 
 function resetPlaylistState() {
@@ -1631,6 +1719,7 @@ function resetPlaylistState() {
 function hideSuccessModal() {
     document.getElementById('success-modal').classList.add('hidden');
     removeNoScrollIfNoModals();
+    focusManager.closeModal();
     resetPlaylistState();
 }
 
@@ -1643,7 +1732,7 @@ let syncPollInterval = null;
 function showSyncModal() {
     const modal = document.getElementById('sync-modal');
     modal.classList.remove('hidden');
-    document.body.classList.add('no-scroll');
+    lockScroll();
 }
 
 function hideSyncModal() {
@@ -1655,24 +1744,29 @@ function hideSyncModal() {
 function updateSyncProgress(phase, current, total) {
     const fill = document.getElementById('sync-progress-fill');
     const text = document.getElementById('sync-progress-text');
+    const bar = fill?.parentElement;
 
     if (phase === 'fetching_albums') {
         // Indeterminate state - fetching album genres
         fill.style.width = '0%';
         text.textContent = 'Fetching album genres...';
+        if (bar) bar.setAttribute('aria-valuenow', '0');
     } else if (phase === 'fetching') {
         // Indeterminate state - fetching tracks from Plex
         fill.style.width = '0%';
         text.textContent = 'Fetching tracks from Plex...';
+        if (bar) bar.setAttribute('aria-valuenow', '0');
     } else if (phase === 'processing') {
         // Processing phase - show progress
         const percent = total > 0 ? (current / total) * 100 : 0;
         fill.style.width = `${percent}%`;
         text.textContent = `${current.toLocaleString()} / ${total.toLocaleString()} tracks`;
+        if (bar) bar.setAttribute('aria-valuenow', Math.round(percent).toString());
     } else {
         // Unknown or null phase - show generic message
         fill.style.width = '0%';
         text.textContent = 'Syncing...';
+        if (bar) bar.setAttribute('aria-valuenow', '0');
     }
 }
 
@@ -2172,7 +2266,9 @@ function renderSearchResults(tracks) {
     }
 
     container.innerHTML = tracks.map(track => `
-        <div class="search-result-item" data-rating-key="${escapeHtml(track.rating_key)}">
+        <div class="search-result-item" data-rating-key="${escapeHtml(track.rating_key)}"
+             role="option" tabindex="0"
+             aria-label="${escapeHtml(track.title)} by ${escapeHtml(track.artist)}">
             ${trackArtHtml(track)}
             <div class="track-info">
                 <div class="track-title">${escapeHtml(track.title)}</div>
@@ -2181,9 +2277,15 @@ function renderSearchResults(tracks) {
         </div>
     `).join('');
 
-    // Add click handlers
+    // Add click and keyboard handlers
     container.querySelectorAll('.search-result-item').forEach(item => {
         item.addEventListener('click', () => selectSeedTrack(item.dataset.ratingKey, tracks));
+        item.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                selectSeedTrack(item.dataset.ratingKey, tracks);
+            }
+        });
     });
 }
 
@@ -2251,17 +2353,22 @@ function renderSeedTrack() {
 function renderDimensions() {
     const container = document.getElementById('dimensions-list');
 
-    container.innerHTML = state.dimensions.map(dim => `
-        <div class="dimension-card ${state.selectedDimensions.includes(dim.id) ? 'selected' : ''}"
-             data-dimension-id="${escapeHtml(dim.id)}">
+    container.innerHTML = state.dimensions.map(dim => {
+        const isSelected = state.selectedDimensions.includes(dim.id);
+        return `
+        <div class="dimension-card ${isSelected ? 'selected' : ''}"
+             data-dimension-id="${escapeHtml(dim.id)}"
+             role="checkbox" tabindex="0"
+             aria-checked="${isSelected}"
+             aria-label="${escapeHtml(dim.label)}: ${escapeHtml(dim.description)}">
             <div class="dimension-label">${escapeHtml(dim.label)}</div>
             <div class="dimension-description">${escapeHtml(dim.description)}</div>
         </div>
-    `).join('');
+    `}).join('');
 
-    // Add click handlers
+    // Add click and keyboard handlers
     container.querySelectorAll('.dimension-card').forEach(card => {
-        card.addEventListener('click', () => {
+        const toggle = () => {
             const dimId = card.dataset.dimensionId;
             if (state.selectedDimensions.includes(dimId)) {
                 state.selectedDimensions = state.selectedDimensions.filter(d => d !== dimId);
@@ -2269,6 +2376,13 @@ function renderDimensions() {
                 state.selectedDimensions.push(dimId);
             }
             renderDimensions();
+        };
+        card.addEventListener('click', toggle);
+        card.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle();
+            }
         });
     });
 }
@@ -2547,34 +2661,49 @@ async function handleSaveSettings() {
 // Instant Queue — Play Now Handlers (005)
 // =============================================================================
 
+function lockScroll() {
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.paddingRight = scrollbarWidth + 'px';
+    document.body.classList.add('no-scroll');
+}
+
+function unlockScroll() {
+    document.body.classList.remove('no-scroll');
+    document.body.style.paddingRight = '';
+}
+
 function removeNoScrollIfNoModals() {
     const openModal = document.querySelector(
         '.modal-overlay:not(.hidden), .success-modal:not(.hidden), .sync-modal:not(.hidden), .bottom-sheet:not(.hidden)'
     );
     if (!openModal) {
-        document.body.classList.remove('no-scroll');
+        unlockScroll();
     }
 }
 
 function dismissClientPicker() {
     document.getElementById('client-picker-modal').classList.add('hidden');
     removeNoScrollIfNoModals();
+    focusManager.closeModal();
 }
 
 function dismissPlayChoice() {
     document.getElementById('play-choice-modal').classList.add('hidden');
     removeNoScrollIfNoModals();
+    focusManager.closeModal();
     state._pendingClientId = null;
 }
 
 function dismissPlaySuccess() {
     document.getElementById('play-success-modal').classList.add('hidden');
     removeNoScrollIfNoModals();
+    focusManager.closeModal();
 }
 
 function dismissUpdateSuccess() {
     document.getElementById('update-success-modal').classList.add('hidden');
     removeNoScrollIfNoModals();
+    focusManager.closeModal();
 }
 
 function populateClientList(clients) {
@@ -2589,8 +2718,10 @@ function populateClientList(clients) {
 
     emptyState.classList.add('hidden');
     listEl.innerHTML = clients.map(client => `
-        <div class="client-item" data-client-id="${escapeHtml(client.client_id)}" role="option">
-            <div class="client-status-dot ${client.is_playing ? 'playing' : 'idle'}"></div>
+        <div class="client-item" data-client-id="${escapeHtml(client.client_id)}"
+             role="option" tabindex="0"
+             aria-label="${escapeHtml(client.name)} — ${escapeHtml(client.product)} on ${escapeHtml(client.platform)}${client.is_playing ? ' (playing)' : ''}">
+            <div class="client-status-dot ${client.is_playing ? 'playing' : 'idle'}" aria-hidden="true"></div>
             <div class="client-info">
                 <div class="client-name">${escapeHtml(client.name)}</div>
                 <span class="client-product-badge">${escapeHtml(client.product)}</span>
@@ -2601,6 +2732,12 @@ function populateClientList(clients) {
 
     listEl.querySelectorAll('.client-item').forEach(item => {
         item.addEventListener('click', () => handleClientSelect(item.dataset.clientId));
+        item.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleClientSelect(item.dataset.clientId);
+            }
+        });
     });
 }
 
@@ -2632,7 +2769,8 @@ async function handlePlayNow() {
     // Show client picker modal with loading spinner while fetching
     const modal = document.getElementById('client-picker-modal');
     modal.classList.remove('hidden');
-    document.body.classList.add('no-scroll');
+    lockScroll();
+    focusManager.openModal(modal);
 
     await refreshClientList();
 }
@@ -2646,8 +2784,10 @@ function handleClientSelect(clientId) {
     if (client.is_playing) {
         // Store pending client ID for choice modal callbacks
         state._pendingClientId = clientId;
-        document.getElementById('play-choice-modal').classList.remove('hidden');
-        document.body.classList.add('no-scroll');
+        const choiceModal = document.getElementById('play-choice-modal');
+        choiceModal.classList.remove('hidden');
+        lockScroll();
+        focusManager.openModal(choiceModal);
     } else {
         executePlayQueue(clientId, 'replace');
     }
@@ -2670,8 +2810,10 @@ async function executePlayQueue(clientId, mode) {
         if (response.success) {
             const message = `${response.tracks_queued} tracks sent to ${response.client_name}`;
             document.getElementById('play-success-message').textContent = message;
-            document.getElementById('play-success-modal').classList.remove('hidden');
-            document.body.classList.add('no-scroll');
+            const playSuccessModal = document.getElementById('play-success-modal');
+            playSuccessModal.classList.remove('hidden');
+            lockScroll();
+            focusManager.openModal(playSuccessModal);
         } else {
             showError(response.error || 'Failed to start playback');
         }
@@ -2846,8 +2988,10 @@ async function handleUpdatePlaylist() {
                 openBtn.style.display = 'none';
             }
 
-            document.getElementById('update-success-modal').classList.remove('hidden');
-            document.body.classList.add('no-scroll');
+            const updateModal = document.getElementById('update-success-modal');
+            updateModal.classList.remove('hidden');
+            lockScroll();
+            focusManager.openModal(updateModal);
 
             // Invalidate playlist cache so newly created scratch playlist appears next time
             state.plexPlaylists = [];
@@ -2870,6 +3014,25 @@ function handleUpdateSuccessNewPlaylist() {
 // =============================================================================
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // macOS + Safari: by default, Tab only focuses form inputs and elements
+    // with explicit tabindex — buttons, links, and other native controls are
+    // skipped. Observe the DOM and add tabindex="0" to any button or link
+    // that lacks one, making them keyboard-navigable regardless of the
+    // system "Keyboard navigation" preference.
+    const ensureTabIndex = (root) => {
+        root.querySelectorAll('button:not([tabindex]), a[href]:not([tabindex])').forEach(el => {
+            el.setAttribute('tabindex', '0');
+        });
+    };
+    ensureTabIndex(document);
+    new MutationObserver((mutations) => {
+        for (const m of mutations) {
+            for (const node of m.addedNodes) {
+                if (node.nodeType === 1) ensureTabIndex(node.parentElement || node);
+            }
+        }
+    }).observe(document.body, { childList: true, subtree: true });
+
     setupEventListeners();
     updateView();
     updateMode();

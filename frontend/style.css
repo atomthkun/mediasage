@@ -11,10 +11,12 @@
     --accent-hover: #f0b020;
     --text-primary: #ffffff;
     --text-secondary: #a0a0a0;
-    --text-muted: #666666;
+    --text-muted: #8e8e8e;
     --border: #3a3a3a;
-    --error: #e53935;
+    --error: #e95c59;
     --success: #43a047;
+    --error-toast: #c62828;
+    --success-toast: #37843b;
     --warning: #fb8c00;
 
     /* Spacing */
@@ -63,6 +65,31 @@ body {
     color: var(--text-primary);
     background-color: var(--bg-primary);
     min-height: 100vh;
+}
+
+/* Skip Link */
+.skip-link {
+    position: absolute;
+    top: -100%;
+    left: var(--spacing-md);
+    background: var(--accent);
+    color: var(--bg-primary);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-radius: var(--radius-md);
+    font-weight: 600;
+    text-decoration: none;
+    z-index: 2000;
+    transition: top var(--transition-fast);
+}
+
+.skip-link:focus {
+    top: var(--spacing-sm);
+}
+
+/* Global focus-visible ring for buttons and interactive elements */
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 /* App Container */
@@ -316,8 +343,16 @@ input[type="text"]:focus,
 input[type="password"]:focus,
 textarea:focus,
 select:focus {
-    outline: none;
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
     border-color: var(--accent);
+}
+
+input[type="text"]:focus:not(:focus-visible),
+input[type="password"]:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible),
+select:focus:not(:focus-visible) {
+    outline: none;
 }
 
 textarea {
@@ -362,6 +397,10 @@ textarea {
 
 .btn-primary:hover {
     background: var(--accent-hover);
+}
+
+.btn-primary:focus-visible {
+    outline-color: var(--text-primary);
 }
 
 .btn-primary:disabled {
@@ -421,6 +460,10 @@ textarea {
 .chip.selected {
     background: var(--accent);
     color: var(--bg-primary);
+}
+
+.chip.selected:focus-visible {
+    outline-color: var(--text-primary);
 }
 
 .chip-count {
@@ -829,7 +872,7 @@ textarea {
 }
 
 .playlist-name-container {
-    margin-bottom: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
 }
 
 .playlist-name-input {
@@ -850,6 +893,11 @@ textarea {
 .playlist-name-input:focus {
     border-color: var(--accent);
     background: var(--bg-secondary);
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+.playlist-name-input:focus:not(:focus-visible) {
     outline: none;
 }
 
@@ -990,6 +1038,7 @@ textarea {
 
     .playlist-tracks {
         max-height: calc(100vh - 400px);
+        padding-right: 0;
     }
 
     .playlist-name-input {
@@ -1166,8 +1215,13 @@ input[type="number"] {
 }
 
 input[type="number"]:focus {
-    outline: none;
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
     border-color: var(--accent);
+}
+
+input[type="number"]:focus:not(:focus-visible) {
+    outline: none;
 }
 
 .settings-actions {
@@ -1484,12 +1538,12 @@ input[type="number"]:focus {
 }
 
 .toast.error {
-    background: var(--error);
+    background: var(--error-toast);
     color: white;
 }
 
 .toast.success {
-    background: var(--success);
+    background: var(--success-toast);
     color: white;
 }
 
@@ -1857,12 +1911,11 @@ input[type="number"]:focus {
 
 /* Playlist Picker Container */
 .playlist-picker-container {
-    margin-bottom: var(--spacing-lg);
+    margin-bottom: var(--spacing-md);
 }
 
 .playlist-picker-select {
     width: 100%;
-    margin-bottom: var(--spacing-sm);
 }
 
 
@@ -2049,13 +2102,100 @@ body.no-scroll {
     display: none;
 }
 
+/* Mobile touch targets — Apple HIG minimum 44px */
+@media (max-width: 768px) {
+    .btn,
+    .btn-ghost {
+        min-height: 44px;
+    }
+
+    .chip {
+        min-height: 44px;
+        padding-left: var(--spacing-md);
+        padding-right: var(--spacing-md);
+    }
+
+    .count-btn,
+    .limit-btn,
+    .rating-btn {
+        min-height: 44px;
+    }
+
+    .track-remove {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .split-button-arrow {
+        min-width: 44px;
+    }
+
+    .save-mode-option {
+        min-height: 44px;
+    }
+
+    .step-number {
+        width: 44px;
+        height: 44px;
+    }
+
+    .results-back-link {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+    }
+
+    .checkbox-label {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+    }
+
+    .checkbox-label input[type="checkbox"] {
+        width: 22px;
+        height: 22px;
+    }
+}
+
+/* Compact mobile overrides — narrower than touch-target query */
 @media (max-width: 600px) {
     .mode-tabs {
-        flex-direction: column;
+        gap: var(--spacing-sm);
+        margin-bottom: var(--spacing-md);
+    }
+
+    .mode-tab {
+        flex-direction: row;
+        justify-content: center;
+        gap: var(--spacing-sm);
+        padding: var(--spacing-sm) var(--spacing-md);
+        min-height: 44px;
+    }
+
+    .mode-icon {
+        font-size: var(--font-size-lg);
+    }
+
+    .step-number {
+        width: 36px;
+        height: 36px;
     }
 
     .step-progress {
         padding: 0;
+        margin-bottom: var(--spacing-md);
+    }
+
+    .step-panel h2 {
+        font-size: var(--font-size-lg);
+    }
+
+    .step-description {
+        margin-bottom: var(--spacing-md);
+    }
+
+    .prompt-textarea {
+        min-height: 80px;
     }
 
     .step-label {
