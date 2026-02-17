@@ -1305,6 +1305,10 @@ input[type="number"]:focus:not(:focus-visible) {
     margin-top: calc(-1 * var(--spacing-sm));
 }
 
+.loading-substep:empty {
+    display: none;
+}
+
 /* Success Modal */
 .success-modal {
     position: fixed;
