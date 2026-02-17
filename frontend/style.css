@@ -288,7 +288,18 @@ select {
     border-radius: var(--radius-md);
     color: var(--text-primary);
     font-size: var(--font-size-base);
+    font-family: var(--font-family);
     transition: border-color var(--transition-fast);
+}
+
+select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%23a0a0a0' stroke-width='1.5' stroke-linecap='round' fill='none'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 36px;
+    cursor: pointer;
 }
 
 input[type="text"]:focus,
@@ -744,7 +755,8 @@ textarea {
 
 /* Results Layout with Side Panel */
 .results-layout {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr 280px;
     gap: var(--spacing-lg);
     margin-bottom: var(--spacing-lg);
 }
@@ -753,10 +765,32 @@ textarea {
     display: flex;
     flex-direction: column;
     gap: var(--spacing-sm);
-    max-height: 400px;
+    max-height: 720px;
     overflow-y: auto;
     flex: 1;
     min-width: 0;
+    padding-right: var(--spacing-sm);
+    /* Firefox */
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+
+/* Chrome, Safari, Edge */
+.playlist-tracks::-webkit-scrollbar {
+    width: 6px;
+}
+
+.playlist-tracks::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.playlist-tracks::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+
+.playlist-tracks::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
 }
 
 /* Track Reason Side Panel (Desktop) */
@@ -814,7 +848,7 @@ textarea {
 /* Hide side panel on mobile */
 @media (max-width: 768px) {
     .results-layout {
-        flex-direction: column;
+        grid-template-columns: 1fr;
     }
 
     .track-reason-panel {
@@ -854,9 +888,10 @@ textarea {
 }
 
 .results-actions {
+    grid-column: 1;
     display: flex;
-    gap: var(--spacing-md);
-    justify-content: flex-end;
+    flex-direction: column;
+    align-items: center;
 }
 
 /* Settings */
@@ -1107,6 +1142,7 @@ input[type="number"]:focus {
     to { opacity: 1; transform: scale(1); }
 }
 
+/* Legacy success icon — kept for the original "Playlist Saved!" modal */
 .success-icon {
     width: 64px;
     height: 64px;
@@ -1148,6 +1184,121 @@ input[type="number"]:focus {
 
 .success-modal-actions .btn {
     width: 100%;
+}
+
+/* ── Instant Queue Success Modals ── */
+.modal-card--success {
+    padding: var(--spacing-xl) var(--spacing-xl) var(--spacing-lg);
+    max-width: 400px;
+}
+
+.success-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
+}
+
+.success-hero h2 {
+    font-size: var(--font-size-xl);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+}
+
+/* Animated ring with icon center */
+.success-ring {
+    position: relative;
+    width: 56px;
+    height: 56px;
+}
+
+.success-ring-svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+
+.success-ring-bg {
+    stroke: var(--bg-hover);
+    fill: none;
+}
+
+.success-ring-progress {
+    stroke: var(--accent);
+    fill: none;
+    stroke-dasharray: 138.23;
+    stroke-dashoffset: 138.23;
+    stroke-linecap: round;
+    animation: ringDraw 0.6s 0.15s ease-out forwards;
+}
+
+@keyframes ringDraw {
+    to { stroke-dashoffset: 0; }
+}
+
+.success-ring-icon {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    color: var(--accent);
+    opacity: 0;
+    animation: iconAppear 0.3s 0.5s ease-out forwards;
+}
+
+@keyframes iconAppear {
+    from { opacity: 0; transform: scale(0.5); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+/* Detail line */
+.success-details {
+    margin-bottom: var(--spacing-lg);
+}
+
+.success-detail-line {
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+    margin: 0;
+}
+
+/* Actions row — side-by-side buttons */
+.success-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+.success-actions .btn {
+    flex: 1;
+    font-size: var(--font-size-sm);
+    padding: 10px var(--spacing-md);
+}
+
+.btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-sm);
+    padding: 10px var(--spacing-lg);
+    border-radius: var(--radius);
+    font-size: var(--font-size-base);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.btn-ghost:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
 }
 
 /* Open in Plex button */
@@ -1431,6 +1582,325 @@ input[type="number"]:focus {
     border-top: 1px solid var(--border);
 }
 
+/* =============================================================================
+   Instant Queue Components (005)
+   ============================================================================= */
+
+/* Action Buttons Row */
+/* Split Button Group */
+.split-button-group {
+    position: relative;
+    display: inline-flex;
+    width: 100%;
+}
+
+.split-button-main {
+    width: 100%;
+}
+
+.split-button-arrow {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    padding: var(--spacing-sm) var(--spacing-sm);
+    border-left: 1px solid rgba(0, 0, 0, 0.2);
+    min-width: 36px;
+}
+
+.split-button-arrow svg {
+    display: block;
+}
+
+/* Save Mode Dropdown */
+.save-mode-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    z-index: 100;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.save-mode-option {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    width: 100%;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    text-align: left;
+    transition: background var(--transition-fast);
+}
+
+.save-mode-option:hover {
+    background: var(--bg-hover);
+}
+
+.save-mode-check {
+    width: 16px;
+    color: var(--accent);
+    font-size: var(--font-size-sm);
+}
+
+.save-mode-option:not(.active) .save-mode-check {
+    visibility: hidden;
+}
+
+/* Or Divider — separates Save vs Play actions */
+.or-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    margin: var(--spacing-md) 0;
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+    width: 100%;
+}
+
+.or-divider::before,
+.or-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+/* Play Now Button */
+.btn-play-now {
+    width: 100%;
+    white-space: nowrap;
+}
+
+/* Play Now helper text */
+.play-now-helper {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    margin-top: var(--spacing-xs);
+    text-align: center;
+}
+
+/* Regenerate Link (demoted from button) */
+.btn-link {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    padding: var(--spacing-sm) 0;
+    transition: color var(--transition-fast);
+}
+
+.btn-link:hover {
+    color: var(--text-secondary);
+}
+
+.regenerate-link {
+    display: block;
+    text-align: center;
+    margin-top: var(--spacing-sm);
+}
+
+/* Playlist Picker Container */
+.playlist-picker-container {
+    margin-bottom: var(--spacing-lg);
+}
+
+.playlist-picker-select {
+    width: 100%;
+    margin-bottom: var(--spacing-sm);
+}
+
+/* Update Mode Toggle — subtle segmented control */
+.update-mode-toggle {
+    display: inline-flex;
+    gap: 2px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius);
+    padding: 2px;
+}
+
+.toggle-btn {
+    padding: 4px 14px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-family: var(--font-family);
+    cursor: pointer;
+    border-radius: calc(var(--radius) - 2px);
+    transition: all var(--transition-fast);
+}
+
+.toggle-btn:hover {
+    color: var(--text-secondary);
+}
+
+.toggle-btn.active {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+/* Modal Overlay (shared) */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(26, 26, 26, 0.95);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn var(--transition-normal);
+}
+
+.modal-overlay.hidden {
+    display: none;
+}
+
+.modal-card {
+    position: relative;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-xl);
+    text-align: center;
+    max-width: 480px;
+    width: 90%;
+    animation: scaleIn var(--transition-normal);
+}
+
+.modal-card h2 {
+    font-size: var(--font-size-xl);
+    margin-bottom: var(--spacing-sm);
+    color: var(--text-primary);
+}
+
+.modal-cancel {
+    display: block;
+    margin: var(--spacing-md) auto 0;
+    color: var(--text-muted);
+}
+
+/* Client Picker */
+.client-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    max-height: 320px;
+    overflow-y: auto;
+    margin: var(--spacing-md) 0;
+    text-align: left;
+}
+
+.client-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+    border: 2px solid transparent;
+}
+
+.client-item:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+}
+
+.client-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.client-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.client-product-badge {
+    display: inline-block;
+    padding: 1px 8px;
+    background: var(--bg-hover);
+    border-radius: var(--radius-full);
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.client-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.client-status-dot.playing {
+    background: var(--success);
+}
+
+.client-empty-state {
+    padding: var(--spacing-xl);
+    color: var(--text-secondary);
+}
+
+.client-empty-state p {
+    margin-bottom: var(--spacing-md);
+}
+
+.client-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-xl);
+    color: var(--text-secondary);
+}
+
+.client-platform {
+    color: var(--text-muted);
+}
+
+/* Play Choice Modal */
+.play-choice-description {
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-lg);
+}
+
+.play-choice-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.play-choice-btn {
+    width: 100%;
+}
+
+/* Mobile Responsive - Instant Queue */
+@media (max-width: 768px) {
+    .modal-card {
+        width: 100%;
+        max-width: none;
+        margin: var(--spacing-md);
+    }
+}
+
 /* Utility Classes */
 .hidden {
     display: none !important;
@@ -1473,11 +1943,4 @@ body.no-scroll {
         display: none;
     }
 
-    .results-actions {
-        flex-direction: column;
-    }
-
-    .results-actions .btn {
-        width: 100%;
-    }
 }

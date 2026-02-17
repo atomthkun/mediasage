@@ -56,6 +56,16 @@ const state = {
 
     // Cached filter preview (for local cost recalculation)
     lastFilterPreview: null,  // { matching_tracks, tracks_to_send }
+
+    // Instant Queue (005) — Play Now
+    plexClients: [],           // Never cached — fetched fresh each time (FR-016)
+    _pendingClientId: null,    // Client ID awaiting play choice modal selection
+
+    // Instant Queue (005) — Update Existing
+    saveMode: 'new',           // 'new' | 'update'
+    updateMode: 'replace',     // 'replace' | 'append'
+    selectedPlaylistId: null,
+    plexPlaylists: [],         // Cached after first fetch (FR-017)
 };
 
 // =============================================================================
@@ -462,6 +472,37 @@ async function savePlaylist(name, ratingKeys, description = '') {
     });
 }
 
+// =============================================================================
+// Instant Queue API Calls (005)
+// =============================================================================
+
+async function fetchPlexClients() {
+    return apiCall('/plex/clients');
+}
+
+async function createPlayQueue(ratingKeys, clientId, mode) {
+    return apiCall('/play-queue', {
+        method: 'POST',
+        body: JSON.stringify({ rating_keys: ratingKeys, client_id: clientId, mode }),
+    });
+}
+
+async function fetchPlexPlaylists() {
+    return apiCall('/plex/playlists');
+}
+
+async function sendPlaylistUpdate(playlistId, ratingKeys, mode, description = '') {
+    return apiCall('/playlist/update', {
+        method: 'POST',
+        body: JSON.stringify({
+            playlist_id: playlistId,
+            rating_keys: ratingKeys,
+            mode,
+            description,
+        }),
+    });
+}
+
 async function fetchLibraryStats() {
     return apiCall('/library/stats');
 }
@@ -827,14 +868,21 @@ function recalculateCostDisplay() {
         tracks_to_send = Math.min(matching_tracks, state.maxTracksToAI);
     }
 
-    // Cost formula (same as backend)
-    const input_tokens = 500 + (tracks_to_send * 50);
-    const output_tokens = state.trackCount * 30;
+    // Cost formula (matches backend: separate rates for analysis + generation models)
+    const analysis_input = 1100;
+    const analysis_output = 200;
+    const gen_input = tracks_to_send * 40;
+    const gen_output = 300 + (state.trackCount * 60);
 
-    // Use cost rates from config
-    const input_cost = (input_tokens / 1_000_000) * state.config.cost_per_million_input;
-    const output_cost = (output_tokens / 1_000_000) * state.config.cost_per_million_output;
-    const estimated_cost = input_cost + output_cost;
+    // Analysis model cost (e.g. Sonnet)
+    const analysis_in_rate = state.config.analysis_cost_per_million_input || state.config.cost_per_million_input;
+    const analysis_out_rate = state.config.analysis_cost_per_million_output || state.config.cost_per_million_output;
+    const analysis_cost = (analysis_input / 1_000_000) * analysis_in_rate + (analysis_output / 1_000_000) * analysis_out_rate;
+
+    // Generation model cost (e.g. Haiku)
+    const gen_cost = (gen_input / 1_000_000) * state.config.cost_per_million_input + (gen_output / 1_000_000) * state.config.cost_per_million_output;
+
+    const estimated_cost = analysis_cost + gen_cost;
 
     updateFilterPreviewDisplay(matching_tracks, tracks_to_send, estimated_cost);
 }
@@ -1435,14 +1483,10 @@ function showSuccessModal(name, trackCount, playlistUrl) {
 function dismissSuccessModal() {
     // Just hide the modal, don't reset state - user can continue with playlist
     document.getElementById('success-modal').classList.add('hidden');
-    document.body.classList.remove('no-scroll');
+    removeNoScrollIfNoModals();
 }
 
-function hideSuccessModal() {
-    document.getElementById('success-modal').classList.add('hidden');
-    document.body.classList.remove('no-scroll');
-
-    // Reset state for next playlist
+function resetPlaylistState() {
     state.step = 'input';
     state.prompt = '';
     state.seedTrack = null;
@@ -1463,6 +1507,12 @@ function hideSuccessModal() {
     state.userRequest = '';
     document.getElementById('prompt-input').value = '';
     updateStep();
+}
+
+function hideSuccessModal() {
+    document.getElementById('success-modal').classList.add('hidden');
+    document.body.classList.remove('no-scroll');
+    resetPlaylistState();
 }
 
 // =============================================================================
@@ -1841,6 +1891,51 @@ function setupEventListeners() {
         validateCustomUrlInline();
     });
 
+    // Play Now button
+    document.getElementById('play-now-btn').addEventListener('click', handlePlayNow);
+
+    // Refresh clients in client picker modal
+    document.getElementById('refresh-clients-btn').addEventListener('click', refreshClientList);
+
+    // Replace Queue / Play Next choice modal buttons
+    document.getElementById('replace-queue-btn').addEventListener('click', () => {
+        executePlayQueue(state._pendingClientId, 'replace');
+    });
+    document.getElementById('play-next-btn').addEventListener('click', () => {
+        executePlayQueue(state._pendingClientId, 'play_next');
+    });
+
+    // Play success modal — Start New Playlist
+    document.getElementById('play-success-new-btn').addEventListener('click', handlePlaySuccessNewPlaylist);
+
+    // Save mode dropdown toggle
+    document.getElementById('save-mode-dropdown-btn').addEventListener('click', toggleSaveModeDropdown);
+
+    // Save mode option selection (New Playlist / Update Existing)
+    document.querySelectorAll('.save-mode-option').forEach(opt => {
+        opt.addEventListener('click', () => setSaveMode(opt.dataset.mode));
+    });
+
+    // Update mode toggle (Replace / Append)
+    document.querySelectorAll('.toggle-btn[data-update-mode]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            state.updateMode = btn.dataset.updateMode;
+            document.querySelectorAll('.toggle-btn[data-update-mode]').forEach(b => {
+                const isActive = b.dataset.updateMode === state.updateMode;
+                b.classList.toggle('active', isActive);
+                b.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+            });
+        });
+    });
+
+    // Playlist picker change
+    document.getElementById('playlist-picker').addEventListener('change', (e) => {
+        state.selectedPlaylistId = e.target.value;
+    });
+
+    // Update success modal — Start New Playlist
+    document.getElementById('update-new-playlist-btn').addEventListener('click', handleUpdateSuccessNewPlaylist);
+
     // Bottom sheet close handlers
     const bottomSheet = document.getElementById('bottom-sheet');
     if (bottomSheet) {
@@ -1860,6 +1955,26 @@ function setupEventListeners() {
             }
         });
     }
+
+    // Escape key dismisses the topmost visible modal
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        const modals = [
+            { id: 'play-choice-modal', dismiss: dismissPlayChoice },
+            { id: 'client-picker-modal', dismiss: dismissClientPicker },
+            { id: 'play-success-modal', dismiss: dismissPlaySuccess },
+            { id: 'update-success-modal', dismiss: dismissUpdateSuccess },
+            { id: 'success-modal', dismiss: dismissSuccessModal },
+            { id: 'bottom-sheet', dismiss: closeBottomSheet },
+        ];
+        for (const { id, dismiss } of modals) {
+            const el = document.getElementById(id);
+            if (el && !el.classList.contains('hidden')) {
+                dismiss();
+                break;
+            }
+        }
+    });
 }
 
 async function handleAnalyzePrompt() {
@@ -2145,6 +2260,12 @@ function generatePlaylistName() {
 }
 
 async function handleSavePlaylist() {
+    // Route to update handler when in update mode
+    if (state.saveMode === 'update') {
+        await handleUpdatePlaylist();
+        return;
+    }
+
     const name = document.getElementById('playlist-name-input').value.trim();
     if (!name) {
         showError('Please enter a playlist name');
@@ -2170,6 +2291,8 @@ async function handleSavePlaylist() {
         if (response.success) {
             const trackCount = response.tracks_added || state.playlist.length;
             showSuccessModal(name, trackCount, response.playlist_url);
+            // Invalidate playlist cache so newly created playlist shows in Update Existing picker
+            state.plexPlaylists = [];
         } else {
             showError(response.error || 'Failed to save playlist');
         }
@@ -2295,6 +2418,303 @@ async function handleSaveSettings() {
 }
 
 // =============================================================================
+// Instant Queue — Play Now Handlers (005)
+// =============================================================================
+
+function removeNoScrollIfNoModals() {
+    if (!document.querySelector('.modal-overlay:not(.hidden)')) {
+        document.body.classList.remove('no-scroll');
+    }
+}
+
+function dismissClientPicker() {
+    document.getElementById('client-picker-modal').classList.add('hidden');
+    removeNoScrollIfNoModals();
+}
+
+function dismissPlayChoice() {
+    document.getElementById('play-choice-modal').classList.add('hidden');
+    removeNoScrollIfNoModals();
+    state._pendingClientId = null;
+}
+
+function dismissPlaySuccess() {
+    document.getElementById('play-success-modal').classList.add('hidden');
+    removeNoScrollIfNoModals();
+}
+
+function dismissUpdateSuccess() {
+    document.getElementById('update-success-modal').classList.add('hidden');
+    removeNoScrollIfNoModals();
+}
+
+function populateClientList(clients) {
+    const listEl = document.getElementById('client-list');
+    const emptyState = document.getElementById('client-empty-state');
+
+    if (!clients.length) {
+        listEl.innerHTML = '';
+        emptyState.classList.remove('hidden');
+        return;
+    }
+
+    emptyState.classList.add('hidden');
+    listEl.innerHTML = clients.map(client => `
+        <div class="client-item" data-client-id="${escapeHtml(client.client_id)}" role="option">
+            <div class="client-status-dot ${client.is_playing ? 'playing' : 'idle'}"></div>
+            <div class="client-info">
+                <div class="client-name">${escapeHtml(client.name)}</div>
+                <span class="client-product-badge">${escapeHtml(client.product)}</span>
+                <span class="client-platform">${escapeHtml(client.platform)}</span>
+            </div>
+        </div>
+    `).join('');
+
+    listEl.querySelectorAll('.client-item').forEach(item => {
+        item.addEventListener('click', () => handleClientSelect(item.dataset.clientId));
+    });
+}
+
+async function refreshClientList() {
+    const listEl = document.getElementById('client-list');
+    const emptyState = document.getElementById('client-empty-state');
+    emptyState.classList.add('hidden');
+    listEl.innerHTML = '<div class="client-loading"><div class="spinner"></div><p>Finding devices...</p></div>';
+
+    try {
+        const clients = await fetchPlexClients();
+        state.plexClients = clients;
+        populateClientList(clients);
+    } catch (error) {
+        dismissClientPicker();
+        showError('Failed to find devices: ' + error.message);
+    }
+}
+
+async function handlePlayNow() {
+    if (!state.playlist.length) {
+        showError('No tracks to play');
+        return;
+    }
+
+    // Show client picker modal with loading spinner while fetching
+    const modal = document.getElementById('client-picker-modal');
+    modal.classList.remove('hidden');
+    document.body.classList.add('no-scroll');
+
+    await refreshClientList();
+}
+
+function handleClientSelect(clientId) {
+    const client = state.plexClients.find(c => c.client_id === clientId);
+    if (!client) return;
+
+    dismissClientPicker();
+
+    if (client.is_playing) {
+        // Store pending client ID for choice modal callbacks
+        state._pendingClientId = clientId;
+        document.getElementById('play-choice-modal').classList.remove('hidden');
+        document.body.classList.add('no-scroll');
+    } else {
+        executePlayQueue(clientId, 'replace');
+    }
+}
+
+async function executePlayQueue(clientId, mode) {
+    dismissPlayChoice();
+    state._pendingClientId = null;
+    if (!clientId) {
+        showError('No device selected');
+        return;
+    }
+    setLoading(true, 'Sending to device...');
+
+    try {
+        const ratingKeys = state.playlist.map(t => t.rating_key);
+        const response = await createPlayQueue(ratingKeys, clientId, mode);
+
+        setLoading(false);
+        if (response.success) {
+            const message = `${response.tracks_queued} tracks sent to ${response.client_name}`;
+            document.getElementById('play-success-message').textContent = message;
+            document.getElementById('play-success-modal').classList.remove('hidden');
+            document.body.classList.add('no-scroll');
+        } else {
+            showError(response.error || 'Failed to start playback');
+        }
+    } catch (error) {
+        setLoading(false);
+        showError(error.message);
+    }
+}
+
+function handlePlaySuccessNewPlaylist() {
+    dismissPlaySuccess();
+    resetPlaylistState();
+}
+
+function toggleSaveModeDropdown() {
+    const dropdown = document.getElementById('save-mode-dropdown');
+    const btn = document.getElementById('save-mode-dropdown-btn');
+    const isHidden = dropdown.classList.contains('hidden');
+
+    dropdown.classList.toggle('hidden');
+    btn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+
+    if (isHidden) {
+        const closeHandler = (e) => {
+            if (!dropdown.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+                dropdown.classList.add('hidden');
+                btn.setAttribute('aria-expanded', 'false');
+                document.removeEventListener('click', closeHandler);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    }
+}
+
+// =============================================================================
+// Instant Queue — Update Existing Handlers (005)
+// =============================================================================
+
+async function fetchAndPopulatePlaylists() {
+    const picker = document.getElementById('playlist-picker');
+
+    // Only fetch if cache is empty
+    if (!state.plexPlaylists.length) {
+        // Show loading state in picker
+        picker.innerHTML = '<option value="" disabled>Loading playlists...</option>';
+
+        try {
+            state.plexPlaylists = await fetchPlexPlaylists();
+        } catch (error) {
+            showError('Failed to load playlists: ' + error.message);
+            picker.innerHTML = '<option value="__scratch__">MediaSage - Now Playing</option>';
+            return;
+        }
+    }
+
+    // Rebuild picker options: fixed scratch option first, then server playlists
+    picker.innerHTML = '<option value="__scratch__">MediaSage - Now Playing</option>';
+    for (const pl of state.plexPlaylists) {
+        // Skip if it's the same as the scratch playlist title (avoid duplicate)
+        if (pl.title === 'MediaSage - Now Playing') continue;
+        const option = document.createElement('option');
+        option.value = pl.rating_key;
+        option.textContent = `${pl.title} (${pl.track_count} tracks)`;
+        picker.appendChild(option);
+    }
+
+    // Restore previous selection if available
+    if (state.selectedPlaylistId) {
+        picker.value = state.selectedPlaylistId;
+    }
+}
+
+function setSaveMode(mode) {
+    state.saveMode = mode;
+
+    // Update dropdown active states
+    const dropdown = document.getElementById('save-mode-dropdown');
+    dropdown.classList.add('hidden');
+    document.getElementById('save-mode-dropdown-btn').setAttribute('aria-expanded', 'false');
+
+    dropdown.querySelectorAll('.save-mode-option').forEach(opt => {
+        const isActive = opt.dataset.mode === mode;
+        opt.classList.toggle('active', isActive);
+        opt.querySelector('.save-mode-check').innerHTML = isActive ? '&#10003;' : '';
+    });
+
+    // Toggle UI elements
+    const saveBtn = document.getElementById('save-playlist-btn');
+    const nameContainer = document.querySelector('.playlist-name-container');
+    const pickerContainer = document.getElementById('playlist-picker-container');
+
+    if (mode === 'new') {
+        saveBtn.textContent = 'Create Playlist';
+        nameContainer.classList.remove('hidden');
+        pickerContainer.classList.add('hidden');
+    } else {
+        saveBtn.textContent = 'Update Playlist';
+        nameContainer.classList.add('hidden');
+        pickerContainer.classList.remove('hidden');
+        fetchAndPopulatePlaylists();
+    }
+
+    // Persist to localStorage (US3 — T017)
+    try { localStorage.setItem('mediasage-save-mode', mode); } catch (e) { /* private browsing */ }
+}
+
+async function handleUpdatePlaylist() {
+    const picker = document.getElementById('playlist-picker');
+    const playlistId = picker.value;
+    const playlistTitle = picker.options[picker.selectedIndex]?.textContent || 'Playlist';
+
+    if (!playlistId) {
+        showError('Please select a playlist');
+        return;
+    }
+
+    if (!state.playlist.length) {
+        showError('Playlist is empty');
+        return;
+    }
+
+    setLoading(true, 'Updating playlist...');
+
+    try {
+        const ratingKeys = state.playlist.map(t => t.rating_key);
+        const response = await sendPlaylistUpdate(
+            playlistId,
+            ratingKeys,
+            state.updateMode,
+            state.narrative,
+        );
+
+        setLoading(false);
+        if (response.success) {
+            // Show update success modal with mode-aware message
+            let message;
+            if (state.updateMode === 'append') {
+                message = `Updated ${playlistTitle} — Added ${response.tracks_added} tracks`;
+                if (response.duplicates_skipped > 0) {
+                    message += ` (${response.duplicates_skipped} duplicates skipped)`;
+                }
+            } else {
+                message = `Updated ${playlistTitle} — Replaced with ${response.tracks_added} tracks`;
+            }
+
+            document.getElementById('update-success-message').textContent = message;
+
+            const openBtn = document.getElementById('update-open-in-plex-btn');
+            if (response.playlist_url) {
+                openBtn.href = response.playlist_url;
+                openBtn.style.display = '';
+            } else {
+                openBtn.style.display = 'none';
+            }
+
+            document.getElementById('update-success-modal').classList.remove('hidden');
+            document.body.classList.add('no-scroll');
+
+            // Invalidate playlist cache so newly created scratch playlist appears next time
+            state.plexPlaylists = [];
+        } else {
+            showError(response.error || 'Failed to update playlist');
+        }
+    } catch (error) {
+        setLoading(false);
+        showError(error.message);
+    }
+}
+
+function handleUpdateSuccessNewPlaylist() {
+    dismissUpdateSuccess();
+    resetPlaylistState();
+}
+
+// =============================================================================
 // Initialization
 // =============================================================================
 
@@ -2316,9 +2736,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Settings will show as not configured
         console.error('Initialization error:', error);
     }
+
+    // Restore save mode from localStorage AFTER config loads (US3 — T017)
+    const savedMode = localStorage.getItem('mediasage-save-mode');
+    if (savedMode === 'update') {
+        setSaveMode('update');
+    }
 });
 
 // Export for global access
 window.hideError = hideError;
 window.hideSuccess = hideSuccess;
 window.hideSuccessModal = hideSuccessModal;
+window.dismissSuccessModal = dismissSuccessModal;
+window.dismissClientPicker = dismissClientPicker;
+window.dismissPlayChoice = dismissPlayChoice;
+window.dismissPlaySuccess = dismissPlaySuccess;
+window.dismissUpdateSuccess = dismissUpdateSuccess;
