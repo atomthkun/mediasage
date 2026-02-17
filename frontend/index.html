@@ -299,6 +299,10 @@
                     <div class="modal-card">
                         <button class="modal-close" onclick="dismissClientPicker()" aria-label="Close">&times;</button>
                         <h2 id="client-picker-title">Select a Device</h2>
+                        <p id="client-picker-hint" class="client-picker-hint hidden">
+                            <span class="hint-group"><span class="client-hint-dot playing"></span> Playing</span>
+                            <span class="hint-group"><span class="client-hint-dot"></span> Idle — may be slow</span>
+                        </p>
                         <div id="client-list" class="client-list" role="listbox" aria-label="Available devices"></div>
                         <div id="client-empty-state" class="client-empty-state hidden">
                             <p>No Plex clients active. Open Plexamp or Plex first.</p>

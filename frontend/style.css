@@ -2021,6 +2021,51 @@ input[type="number"]:focus:not(:focus-visible) {
     background: var(--success);
 }
 
+.client-picker-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 0;
+}
+
+.client-picker-hint .hint-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.client-hint-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-full);
+    background: var(--text-muted);
+}
+
+.client-hint-dot.playing {
+    background: var(--success);
+}
+
+.client-status-text {
+    font-size: 0.75rem;
+    margin-top: 2px;
+}
+
+.client-status-text.status-playing {
+    color: var(--success);
+}
+
+.client-status-text.status-idle {
+    color: var(--text-muted);
+}
+
+.client-status-text.status-mobile {
+    color: var(--warning);
+}
+
 .client-empty-state {
     padding: var(--spacing-xl);
     color: var(--text-secondary);

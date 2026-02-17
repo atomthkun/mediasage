@@ -2711,29 +2711,46 @@ function dismissUpdateSuccess() {
     focusManager.closeModal();
 }
 
+function getClientStatusText(client) {
+    if (client.is_playing) {
+        return { text: 'Playing', cls: 'status-playing' };
+    }
+    if (client.is_mobile) {
+        return { text: 'Idle — start playing on device first', cls: 'status-mobile' };
+    }
+    return { text: 'Idle — may be slow to respond', cls: 'status-idle' };
+}
+
 function populateClientList(clients) {
     const listEl = document.getElementById('client-list');
     const emptyState = document.getElementById('client-empty-state');
 
+    const hintEl = document.getElementById('client-picker-hint');
+
     if (!clients.length) {
         listEl.innerHTML = '';
         emptyState.classList.remove('hidden');
+        hintEl.classList.add('hidden');
         return;
     }
 
     emptyState.classList.add('hidden');
-    listEl.innerHTML = clients.map(client => `
+    hintEl.classList.remove('hidden');
+    listEl.innerHTML = clients.map(client => {
+        const status = getClientStatusText(client);
+        return `
         <div class="client-item" data-client-id="${escapeHtml(client.client_id)}"
              role="option" tabindex="0"
-             aria-label="${escapeHtml(client.name)} — ${escapeHtml(client.product)} on ${escapeHtml(client.platform)}${client.is_playing ? ' (playing)' : ''}">
+             aria-label="${escapeHtml(client.name)} — ${escapeHtml(client.product)} on ${escapeHtml(client.platform)} — ${status.text}">
             <div class="client-status-dot ${client.is_playing ? 'playing' : 'idle'}" aria-hidden="true"></div>
             <div class="client-info">
                 <div class="client-name">${escapeHtml(client.name)}</div>
                 <span class="client-product-badge">${escapeHtml(client.product)}</span>
                 <span class="client-platform">${escapeHtml(client.platform)}</span>
+                <div class="client-status-text ${status.cls}">${status.text}</div>
             </div>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
 
     listEl.querySelectorAll('.client-item').forEach(item => {
         item.addEventListener('click', () => handleClientSelect(item.dataset.clientId));
@@ -2823,7 +2840,11 @@ async function executePlayQueue(clientId, mode) {
             lockScroll();
             focusManager.openModal(playSuccessModal);
         } else {
-            showError(response.error || 'Failed to start playback');
+            let errorMsg = response.error || 'Failed to start playback';
+            if (/not found|offline|couldn't be reached/i.test(errorMsg)) {
+                errorMsg = "Device couldn't be reached. Try starting playback on the device first, then re-open the picker.";
+            }
+            showError(errorMsg);
         }
     } catch (error) {
         setLoading(false);
