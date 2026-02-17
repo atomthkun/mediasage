@@ -70,6 +70,11 @@ body {
     max-width: 960px;
     margin: 0 auto;
     padding: var(--spacing-md);
+    transition: max-width var(--transition-normal);
+}
+
+.app.app--wide {
+    max-width: 1200px;
 }
 
 /* Header */
@@ -963,7 +968,14 @@ textarea {
     padding-top: var(--spacing-sm);
 }
 
-/* Hide side panel on mobile */
+/* Tablet: narrower detail panel */
+@media (min-width: 769px) and (max-width: 1023px) {
+    .results-layout {
+        grid-template-columns: 1fr var(--detail-panel-width-narrow);
+    }
+}
+
+/* Mobile: single column, hide detail panel */
 @media (max-width: 768px) {
     .results-layout {
         grid-template-columns: 1fr;
@@ -971,6 +983,42 @@ textarea {
 
     .track-reason-panel {
         display: none;
+    }
+
+    .results-header-bar {
+        flex-direction: column;
+        gap: var(--spacing-md);
+    }
+
+    .results-header-actions {
+        flex-direction: row;
+        flex-wrap: wrap;
+        min-width: 0;
+        width: 100%;
+    }
+
+    .results-header-actions .split-button-group {
+        flex: 1;
+        min-width: 140px;
+    }
+
+    .results-header-actions .btn-play-now {
+        flex: 1;
+        min-width: 120px;
+    }
+
+    .playlist-tracks {
+        max-height: calc(100vh - 400px);
+    }
+
+    .results-footer {
+        flex-direction: column;
+        gap: var(--spacing-xs);
+        text-align: center;
+    }
+
+    .playlist-name-input {
+        font-size: var(--font-size-lg);
     }
 }
 
@@ -1781,37 +1829,9 @@ input[type="number"]:focus {
     visibility: hidden;
 }
 
-/* Or Divider — separates Save vs Play actions */
-.or-divider {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-md);
-    margin: var(--spacing-md) 0;
-    color: var(--text-muted);
-    font-size: var(--font-size-sm);
-    width: 100%;
-}
-
-.or-divider::before,
-.or-divider::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-}
-
 /* Play Now Button */
 .btn-play-now {
-    width: 100%;
     white-space: nowrap;
-}
-
-/* Play Now helper text */
-.play-now-helper {
-    color: var(--text-muted);
-    font-size: 0.78rem;
-    margin-top: var(--spacing-xs);
-    text-align: center;
 }
 
 /* Regenerate Link (demoted from button) */

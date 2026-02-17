@@ -574,6 +574,18 @@ function updateMode() {
 }
 
 function updateStep() {
+    const isResults = state.step === 'results';
+
+    // Hide step progress and mode tabs on results step
+    const stepProgress = document.querySelector('.step-progress');
+    const modeTabs = document.querySelector('.mode-tabs');
+    if (stepProgress) stepProgress.style.display = isResults ? 'none' : '';
+    if (modeTabs) modeTabs.style.display = isResults ? 'none' : '';
+
+    // Toggle wide layout for results
+    const appEl = document.querySelector('.app');
+    if (appEl) appEl.classList.toggle('app--wide', isResults);
+
     // Update step progress indicators
     const steps = ['input', 'dimensions', 'filters', 'results'];
     const currentIndex = steps.indexOf(state.step);
@@ -1914,6 +1926,12 @@ function setupEventListeners() {
     // Regenerate
     document.getElementById('regenerate-btn').addEventListener('click', handleGenerate);
 
+    // Back to filters
+    document.getElementById('back-to-filters-btn').addEventListener('click', () => {
+        state.step = 'filters';
+        updateStep();
+    });
+
     // Remove track (with selection management)
     document.getElementById('playlist-tracks').addEventListener('click', e => {
         const removeBtn = e.target.closest('.track-remove');
@@ -2334,6 +2352,9 @@ async function handleGenerate() {
 
             // Use generated title for playlist name, fallback to old method
             state.playlistName = state.playlistTitle || generatePlaylistName();
+
+            // Reset selection so auto-select picks first new track
+            state.selectedTrackKey = null;
 
             state.step = 'results';
             updateStep();
