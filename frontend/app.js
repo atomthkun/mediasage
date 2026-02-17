@@ -914,13 +914,13 @@ function recalculateCostDisplay() {
 
     // Cost formula (matches backend: separate rates for analysis + generation models)
     const analysis_input = 1100;
-    const analysis_output = 200;
+    const analysis_output = 300;
     const gen_input = tracks_to_send * 40;
-    const gen_output = 300 + (state.trackCount * 60);
+    const gen_output = state.trackCount * 60;
 
     // Analysis model cost (e.g. Sonnet)
-    const analysis_in_rate = state.config.analysis_cost_per_million_input || state.config.cost_per_million_input;
-    const analysis_out_rate = state.config.analysis_cost_per_million_output || state.config.cost_per_million_output;
+    const analysis_in_rate = state.config.analysis_cost_per_million_input ?? state.config.cost_per_million_input;
+    const analysis_out_rate = state.config.analysis_cost_per_million_output ?? state.config.cost_per_million_output;
     const analysis_cost = (analysis_input / 1_000_000) * analysis_in_rate + (analysis_output / 1_000_000) * analysis_out_rate;
 
     // Generation model cost (e.g. Haiku)
@@ -950,7 +950,7 @@ function renderNarrativeBox() {
     const promptPill = document.getElementById('results-prompt-pill');
     if (promptPill) {
         if (state.userRequest) {
-            promptPill.textContent = `\u{1F4AC} "${escapeHtml(state.userRequest)}"`;
+            promptPill.textContent = `\u{1F4AC} "${state.userRequest}"`;
             promptPill.classList.remove('hidden');
         } else {
             promptPill.classList.add('hidden');
@@ -1044,7 +1044,7 @@ function closeBottomSheet() {
     if (!sheet) return;
 
     sheet.classList.add('hidden');
-    document.body.classList.remove('no-scroll');
+    removeNoScrollIfNoModals();
 }
 
 function updatePlaylist() {
@@ -1630,7 +1630,7 @@ function resetPlaylistState() {
 
 function hideSuccessModal() {
     document.getElementById('success-modal').classList.add('hidden');
-    document.body.classList.remove('no-scroll');
+    removeNoScrollIfNoModals();
     resetPlaylistState();
 }
 
@@ -1649,7 +1649,7 @@ function showSyncModal() {
 function hideSyncModal() {
     const modal = document.getElementById('sync-modal');
     modal.classList.add('hidden');
-    document.body.classList.remove('no-scroll');
+    removeNoScrollIfNoModals();
 }
 
 function updateSyncProgress(phase, current, total) {
@@ -2548,7 +2548,10 @@ async function handleSaveSettings() {
 // =============================================================================
 
 function removeNoScrollIfNoModals() {
-    if (!document.querySelector('.modal-overlay:not(.hidden)')) {
+    const openModal = document.querySelector(
+        '.modal-overlay:not(.hidden), .success-modal:not(.hidden), .sync-modal:not(.hidden), .bottom-sheet:not(.hidden)'
+    );
+    if (!openModal) {
         document.body.classList.remove('no-scroll');
     }
 }
@@ -2789,7 +2792,8 @@ function setSaveMode(mode) {
 async function handleUpdatePlaylist() {
     const picker = document.getElementById('playlist-picker');
     const playlistId = picker.value;
-    const playlistTitle = picker.options[picker.selectedIndex]?.textContent || 'Playlist';
+    const matchedPlaylist = state.plexPlaylists.find(p => p.rating_key === playlistId);
+    const playlistTitle = matchedPlaylist?.title || picker.options[picker.selectedIndex]?.textContent || 'Playlist';
 
     if (!playlistId) {
         showError('Please select a playlist');
@@ -2823,6 +2827,10 @@ async function handleUpdatePlaylist() {
                 }
             } else {
                 message = `Updated ${playlistTitle} — Replaced with ${response.tracks_added} tracks`;
+            }
+
+            if (response.warning) {
+                message += ` ⚠ ${response.warning}`;
             }
 
             document.getElementById('update-success-message').textContent = message;
@@ -2878,13 +2886,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // Restore save mode from localStorage AFTER config loads (US3 — T017)
-    const savedMode = localStorage.getItem('mediasage-save-mode');
-    if (savedMode === 'replace' || savedMode === 'append') {
-        setSaveMode(savedMode);
-    }
+    try {
+        const savedMode = localStorage.getItem('mediasage-save-mode');
+        if (savedMode === 'replace' || savedMode === 'append') {
+            setSaveMode(savedMode);
+        }
+    } catch (e) { /* private browsing / storage disabled */ }
 });
 
 // Export for global access
+window.artPlaceholderHtml = artPlaceholderHtml;
 window.hideError = hideError;
 window.hideSuccess = hideSuccess;
 window.hideSuccessModal = hideSuccessModal;

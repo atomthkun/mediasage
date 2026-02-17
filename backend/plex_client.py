@@ -184,6 +184,7 @@ class PlexClient:
         self._error: str | None = None
         self._last_reconnect_attempt: float = time.time()
         self._reconnect_lock = threading.Lock()
+        self._scratch_lock = threading.Lock()
         self._connect()
 
     def _connect(self) -> None:
@@ -774,6 +775,16 @@ class PlexClient:
         try:
             account = self._server.myPlexAccount()
             resources = account.resources()
+
+            # Pre-fetch sessions once for all cloud resources
+            playing_ids: set[str] = set()
+            try:
+                for session in self._server.sessions():
+                    if session.player:
+                        playing_ids.add(session.player.machineIdentifier)
+            except Exception:
+                pass
+
             for resource in resources:
                 provides = getattr(resource, "provides", "") or ""
                 if "player" not in provides:
@@ -786,23 +797,13 @@ class PlexClient:
                 if not getattr(resource, "presence", False):
                     continue
 
-                # Determine playback state from sessions
-                is_playing = False
-                try:
-                    for session in self._server.sessions():
-                        if session.player and session.player.machineIdentifier == client_id:
-                            is_playing = True
-                            break
-                except Exception:
-                    pass
-
                 seen_ids.add(client_id)
                 result.append(PlexClientInfo(
                     client_id=client_id,
                     name=resource.name,
                     product=getattr(resource, "product", "Unknown"),
                     platform=getattr(resource, "platform", "Unknown") or getattr(resource, "platformVersion", "Unknown"),
-                    is_playing=is_playing,
+                    is_playing=client_id in playing_ids,
                 ))
         except Exception as e:
             logger.warning("Failed to query account resources for players: %s", e)
@@ -860,49 +861,50 @@ class PlexClient:
         try:
             # Handle __scratch__ sentinel — find or create "MediaSage - Now Playing"
             if playlist_id == "__scratch__":
-                scratch_playlist = None
-                try:
-                    for p in self._server.playlists(playlistType="audio"):
-                        if p.title == "MediaSage - Now Playing":
-                            scratch_playlist = p
-                            break
-                except Exception as e:
-                    logger.warning("Failed to search for scratch playlist: %s", e)
+                with self._scratch_lock:
+                    scratch_playlist = None
+                    try:
+                        for p in self._server.playlists(playlistType="audio"):
+                            if p.title == "MediaSage - Now Playing":
+                                scratch_playlist = p
+                                break
+                    except Exception as e:
+                        logger.warning("Failed to search for scratch playlist: %s", e)
 
-                if scratch_playlist is None:
-                    # Create new scratch playlist with the provided tracks
-                    items = []
-                    tracks_skipped = 0
-                    for key in rating_keys:
-                        try:
-                            items.append(self._server.fetchItem(int(key)))
-                        except Exception:
-                            tracks_skipped += 1
+                    if scratch_playlist is None:
+                        # Create new scratch playlist with the provided tracks
+                        items = []
+                        tracks_skipped = 0
+                        for key in rating_keys:
+                            try:
+                                items.append(self._server.fetchItem(int(key)))
+                            except Exception:
+                                tracks_skipped += 1
 
-                    if not items:
-                        return {"success": False, "error": "No valid tracks found"}
+                        if not items:
+                            return {"success": False, "error": "No valid tracks found"}
 
-                    playlist = self._server.createPlaylist(
-                        "MediaSage - Now Playing", items=items
-                    )
+                        playlist = self._server.createPlaylist(
+                            "MediaSage - Now Playing", items=items
+                        )
 
-                    if description:
-                        try:
-                            playlist.edit(summary=description)
-                        except Exception as e:
-                            logger.warning("Failed to set playlist description: %s", e)
+                        if description:
+                            try:
+                                playlist.edit(summary=description)
+                            except Exception as e:
+                                logger.warning("Failed to set playlist description: %s", e)
 
-                    playlist_url = self._build_playlist_url(playlist.ratingKey)
-                    return {
-                        "success": True,
-                        "tracks_added": len(items),
-                        "tracks_skipped": tracks_skipped,
-                        "duplicates_skipped": 0,
-                        "playlist_url": playlist_url,
-                    }
-                else:
-                    # Use the existing scratch playlist
-                    playlist_id = str(scratch_playlist.ratingKey)
+                        playlist_url = self._build_playlist_url(playlist.ratingKey)
+                        return {
+                            "success": True,
+                            "tracks_added": len(items),
+                            "tracks_skipped": tracks_skipped,
+                            "duplicates_skipped": 0,
+                            "playlist_url": playlist_url,
+                        }
+                    else:
+                        # Use the existing scratch playlist
+                        playlist_id = str(scratch_playlist.ratingKey)
 
             # Fetch the target playlist
             playlist = self._server.fetchItem(int(playlist_id))
@@ -1048,11 +1050,13 @@ class PlexClient:
 
         # Fetch track objects
         tracks = []
+        tracks_skipped = 0
         for key in rating_keys:
             try:
                 item = self._server.fetchItem(int(key))
                 tracks.append(item)
             except Exception as e:
+                tracks_skipped += 1
                 logger.warning("Failed to fetch track %s for play queue: %s", key, e)
 
         if not tracks:
@@ -1071,10 +1075,14 @@ class PlexClient:
                 # Get current play queue from client timeline entries
                 # timelines() returns a list; timeline is a single object/None
                 play_queue_id = None
-                for entry in target_client.timelines():
-                    if entry.type == "music" and getattr(entry, "playQueueID", None):
-                        play_queue_id = entry.playQueueID
-                        break
+                try:
+                    for entry in target_client.timelines():
+                        if entry.type == "music" and getattr(entry, "playQueueID", None):
+                            play_queue_id = entry.playQueueID
+                            break
+                except Exception as e:
+                    logger.warning("Failed to get timelines from client %s: %s", client_id, e)
+                    return {"success": False, "error": "Could not read active queue from client"}
                 if not play_queue_id:
                     return {
                         "success": False,
@@ -1084,17 +1092,26 @@ class PlexClient:
                     self._server, play_queue_id, own=True
                 )
                 # Add in reverse order so tracks play in intended order
-                for track in reversed(tracks):
-                    existing_queue.addItem(track, playNext=True, refresh=True)
+                tracks_queued = 0
+                reversed_tracks = list(reversed(tracks))
+                for i, track in enumerate(reversed_tracks):
+                    try:
+                        is_last = i == len(reversed_tracks) - 1
+                        existing_queue.addItem(track, playNext=True, refresh=is_last)
+                        tracks_queued += 1
+                    except Exception:
+                        logger.warning("Failed to add track %s to queue", track.ratingKey)
 
             else:
                 return {"success": False, "error": f"Unknown play queue mode: {mode}"}
 
+            actual_queued = tracks_queued if mode == "play_next" else len(tracks)
             return {
                 "success": True,
                 "client_name": target_client.title,
                 "client_product": target_client.product,
-                "tracks_queued": len(tracks),
+                "tracks_queued": actual_queued,
+                "tracks_skipped": tracks_skipped,
             }
         except ConnectionError:
             return {

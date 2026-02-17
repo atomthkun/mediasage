@@ -741,10 +741,11 @@ class TestPlexClientPlayQueue:
         assert add_calls[0][0][0] == mock_track3
         assert add_calls[1][0][0] == mock_track2
         assert add_calls[2][0][0] == mock_track1
-        # Each call should have playNext=True, refresh=True
-        for call in add_calls:
+        # Each call should have playNext=True; only last call has refresh=True
+        for i, call in enumerate(add_calls):
             assert call[1].get("playNext") is True
-            assert call[1].get("refresh") is True
+            expected_refresh = (i == len(add_calls) - 1)
+            assert call[1].get("refresh") is expected_refresh
 
         # Verify return values
         assert result["success"] is True

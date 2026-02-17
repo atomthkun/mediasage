@@ -258,11 +258,19 @@ class SavePlaylistRequest(BaseModel):
             raise ValueError("Playlist name cannot be empty")
         return v.strip()
 
+    @field_validator("description")
+    @classmethod
+    def truncate_description(cls, v: str) -> str:
+        return v[:2000] if v else v
+
     @field_validator("rating_keys")
     @classmethod
     def validate_rating_keys(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("At least one track is required")
+        for key in v:
+            if not key.isdigit():
+                raise ValueError(f"Invalid rating key: {key}")
         return v
 
 
@@ -308,6 +316,11 @@ class UpdatePlaylistRequest(BaseModel):
     mode: Literal["replace", "append"]
     description: str = ""
 
+    @field_validator("description")
+    @classmethod
+    def truncate_description(cls, v: str) -> str:
+        return v[:2000] if v else v
+
     @field_validator("playlist_id")
     @classmethod
     def validate_playlist_id(cls, v: str) -> str:
@@ -320,6 +333,9 @@ class UpdatePlaylistRequest(BaseModel):
     def validate_rating_keys(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("At least one track is required")
+        for key in v:
+            if not key.isdigit():
+                raise ValueError(f"Invalid rating key: {key}")
         return v
 
 
@@ -342,11 +358,21 @@ class PlayQueueRequest(BaseModel):
     client_id: str
     mode: Literal["replace", "play_next"] = "replace"
 
+    @field_validator("client_id")
+    @classmethod
+    def validate_client_id(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("client_id cannot be empty")
+        return v
+
     @field_validator("rating_keys")
     @classmethod
     def validate_rating_keys(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("At least one track is required")
+        for key in v:
+            if not key.isdigit():
+                raise ValueError(f"Invalid rating key: {key}")
         return v
 
 
@@ -357,6 +383,7 @@ class PlayQueueResponse(BaseModel):
     client_name: str | None = None
     client_product: str | None = None
     tracks_queued: int = 0
+    tracks_skipped: int = 0
     error: str | None = None
 
 
