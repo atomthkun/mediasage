@@ -601,6 +601,21 @@ async function triggerLibrarySync() {
 // UI Updates
 // =============================================================================
 
+const HASH_TO_VIEW = { 'make-playlist': 'create', 'settings': 'settings' };
+const VIEW_TO_HASH = { 'create': 'make-playlist', 'settings': 'settings' };
+
+function viewFromHash() {
+    return HASH_TO_VIEW[location.hash.slice(1)] || 'create';
+}
+
+function navigateTo(view) {
+    state.view = view;
+    updateView();
+    if (view === 'settings') {
+        loadSettings();
+    }
+}
+
 function updateView() {
     // Update nav buttons (class and ARIA state)
     document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -1934,11 +1949,7 @@ function setupEventListeners() {
     // Navigation
     document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            state.view = btn.dataset.view;
-            updateView();
-            if (state.view === 'settings') {
-                loadSettings();
-            }
+            location.hash = '#' + VIEW_TO_HASH[btn.dataset.view];
         });
     });
 
@@ -1947,11 +1958,12 @@ function setupEventListeners() {
         const link = e.target.closest('.llm-required-hint a[data-view]');
         if (link) {
             e.preventDefault();
-            state.view = link.dataset.view;
-            updateView();
-            loadSettings();
+            location.hash = '#' + VIEW_TO_HASH[link.dataset.view];
         }
     });
+
+    // Hash-based routing for top-level views
+    window.addEventListener('hashchange', () => navigateTo(viewFromHash()));
 
     // Mode tabs
     document.querySelectorAll('.mode-tab').forEach(tab => {
@@ -3063,6 +3075,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }).observe(document.body, { childList: true, subtree: true });
 
     setupEventListeners();
+    state.view = viewFromHash();
     updateView();
     updateMode();
     updateStep();
