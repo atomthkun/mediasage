@@ -15,9 +15,9 @@
         <!-- Header -->
         <header class="header">
             <h1 class="logo">MediaSage</h1>
-            <nav class="nav" role="tablist" aria-label="Main navigation">
-                <button class="nav-btn active" data-view="create" role="tab" aria-selected="true">Create</button>
-                <button class="nav-btn" data-view="settings" role="tab" aria-selected="false">Settings</button>
+            <nav class="nav" role="navigation" aria-label="Main navigation">
+                <button class="nav-btn active" data-view="create" aria-selected="true">Create</button>
+                <button class="nav-btn" data-view="settings" aria-selected="false">Settings</button>
             </nav>
         </header>
 
@@ -26,12 +26,12 @@
             <!-- Create View -->
             <div id="create-view" class="view active">
                 <!-- Mode Selection -->
-                <div class="mode-tabs" role="tablist" aria-label="Playlist creation mode">
-                    <button class="mode-tab active" data-mode="prompt" role="tab" aria-selected="true">
+                <div class="mode-tabs" role="navigation" aria-label="Playlist creation mode">
+                    <button class="mode-tab active" data-mode="prompt" aria-selected="true">
                         <span class="mode-icon" aria-hidden="true">💭</span>
                         <span class="mode-label">Prompt</span>
                     </button>
-                    <button class="mode-tab" data-mode="seed" role="tab" aria-selected="false">
+                    <button class="mode-tab" data-mode="seed" aria-selected="false">
                         <span class="mode-icon" aria-hidden="true">🎵</span>
                         <span class="mode-label">Seed Track</span>
                     </button>
@@ -243,7 +243,7 @@
                         </div>
 
                         <div class="results-layout">
-                            <div id="playlist-tracks" class="playlist-tracks" role="list" aria-label="Generated playlist"></div>
+                            <div id="playlist-tracks" class="playlist-tracks" role="listbox" aria-label="Generated playlist"></div>
                             <aside id="track-reason-panel" class="track-reason-panel">
                                 <div class="reason-placeholder">Click a track to see why it was chosen</div>
                                 <div class="reason-content hidden">

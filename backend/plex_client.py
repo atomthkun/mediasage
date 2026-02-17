@@ -771,7 +771,7 @@ class PlexClient:
                 is_playing=is_playing,
             ))
 
-        local_count = len(seen_ids)
+        local_count = len(result)
 
         # Method 2: Cloud-connected players via account resources
         try:
@@ -810,7 +810,7 @@ class PlexClient:
         except Exception as e:
             logger.warning("Failed to query account resources for players: %s", e)
 
-        logger.info("Client discovery: %d found (%d local, %d cloud)", len(result), local_count, len(result) - local_count)
+        logger.debug("Client discovery: %d found (%d local, %d cloud)", len(result), local_count, len(result) - local_count)
         return result
 
     def get_playlists(self) -> list[PlexPlaylistInfo]:

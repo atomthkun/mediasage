@@ -7,23 +7,21 @@
 // =============================================================================
 
 const focusManager = {
-    _previousFocus: null,
-    _trapHandler: null,
+    _stack: [],
 
     /** Open a modal: save focus, move into modal, trap Tab within it */
     openModal(modalEl) {
-        this._previousFocus = document.activeElement;
+        const previousFocus = document.activeElement;
 
         // Find focusable elements inside the modal
         const focusable = this._getFocusable(modalEl);
         if (focusable.length) {
-            // Focus the close button if present, otherwise first focusable
             const closeBtn = modalEl.querySelector('.modal-close, .bottom-sheet-close');
             requestAnimationFrame(() => (closeBtn || focusable[0]).focus());
         }
 
         // Trap Tab within modal
-        this._trapHandler = (e) => {
+        const trapHandler = (e) => {
             if (e.key !== 'Tab') return;
             const els = this._getFocusable(modalEl);
             if (!els.length) return;
@@ -37,25 +35,24 @@ const focusManager = {
                 first.focus();
             }
         };
-        document.addEventListener('keydown', this._trapHandler);
+        document.addEventListener('keydown', trapHandler);
+        this._stack.push({ previousFocus, trapHandler });
     },
 
     /** Close a modal: remove trap, restore previous focus */
     closeModal() {
-        if (this._trapHandler) {
-            document.removeEventListener('keydown', this._trapHandler);
-            this._trapHandler = null;
-        }
-        if (this._previousFocus && typeof this._previousFocus.focus === 'function') {
-            this._previousFocus.focus();
-            this._previousFocus = null;
+        const entry = this._stack.pop();
+        if (!entry) return;
+        document.removeEventListener('keydown', entry.trapHandler);
+        if (entry.previousFocus && typeof entry.previousFocus.focus === 'function') {
+            entry.previousFocus.focus();
         }
     },
 
     _getFocusable(el) {
         return [...el.querySelectorAll(
             'a[href], button:not([disabled]), textarea, input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-        )].filter(e => !e.closest('.hidden'));
+        )].filter(e => !e.closest('.hidden') && e.offsetParent !== null);
     }
 };
 
@@ -1733,12 +1730,14 @@ function showSyncModal() {
     const modal = document.getElementById('sync-modal');
     modal.classList.remove('hidden');
     lockScroll();
+    focusManager.openModal(modal);
 }
 
 function hideSyncModal() {
     const modal = document.getElementById('sync-modal');
     modal.classList.add('hidden');
     removeNoScrollIfNoModals();
+    focusManager.closeModal();
 }
 
 function updateSyncProgress(phase, current, total) {
@@ -2352,6 +2351,7 @@ function renderSeedTrack() {
 
 function renderDimensions() {
     const container = document.getElementById('dimensions-list');
+    const focusedId = document.activeElement?.dataset?.dimensionId;
 
     container.innerHTML = state.dimensions.map(dim => {
         const isSelected = state.selectedDimensions.includes(dim.id);
@@ -2385,6 +2385,10 @@ function renderDimensions() {
             }
         });
     });
+
+    if (focusedId) {
+        container.querySelector(`[data-dimension-id="${CSS.escape(focusedId)}"]`)?.focus();
+    }
 }
 
 async function handleContinueToFilters() {
@@ -2662,6 +2666,7 @@ async function handleSaveSettings() {
 // =============================================================================
 
 function lockScroll() {
+    if (document.body.classList.contains('no-scroll')) return;
     const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
     document.body.style.paddingRight = scrollbarWidth + 'px';
     document.body.classList.add('no-scroll');
@@ -2794,7 +2799,10 @@ function handleClientSelect(clientId) {
 }
 
 async function executePlayQueue(clientId, mode) {
-    dismissPlayChoice();
+    const choiceModal = document.getElementById('play-choice-modal');
+    if (!choiceModal.classList.contains('hidden')) {
+        dismissPlayChoice();
+    }
     state._pendingClientId = null;
     if (!clientId) {
         showError('No device selected');
@@ -2891,7 +2899,7 @@ function updateAppendTrackCount() {
 
     const count = state.playlist.length;
     const saveBtn = document.getElementById('save-playlist-btn');
-    if (saveBtn) saveBtn.textContent = `Add ${count} track${count !== 1 ? 's' : ''}`;
+    if (saveBtn) saveBtn.innerHTML = `<span class="btn-label-long">Add ${count} track${count !== 1 ? 's' : ''}</span><span class="btn-label-short">Append</span>`;
 }
 
 function setSaveMode(mode) {
@@ -2921,13 +2929,13 @@ function setSaveMode(mode) {
         saveBtn.innerHTML = '<span class="btn-label-long">Replace all tracks</span><span class="btn-label-short">Replace</span>';
         nameContainer.classList.add('hidden');
         pickerContainer.classList.remove('hidden');
-        fetchAndPopulatePlaylists();
+        if (state.playlist.length > 0) fetchAndPopulatePlaylists();
     } else if (mode === 'append') {
         const count = state.playlist.length;
         saveBtn.innerHTML = `<span class="btn-label-long">Add ${count} track${count !== 1 ? 's' : ''}</span><span class="btn-label-short">Append</span>`;
         nameContainer.classList.add('hidden');
         pickerContainer.classList.remove('hidden');
-        fetchAndPopulatePlaylists();
+        if (state.playlist.length > 0) fetchAndPopulatePlaylists();
     }
 
     // Persist to localStorage (US3 — T017)
@@ -3028,7 +3036,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     new MutationObserver((mutations) => {
         for (const m of mutations) {
             for (const node of m.addedNodes) {
-                if (node.nodeType === 1) ensureTabIndex(node.parentElement || node);
+                if (node.nodeType === 1) ensureTabIndex(node);
             }
         }
     }).observe(document.body, { childList: true, subtree: true });
