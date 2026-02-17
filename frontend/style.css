@@ -58,6 +58,10 @@
     padding: 0;
 }
 
+html {
+    overflow-y: scroll;
+}
+
 body {
     font-family: var(--font-family);
     font-size: var(--font-size-base);
@@ -144,6 +148,17 @@ body {
 .nav-btn.active {
     color: var(--accent);
     background: var(--bg-secondary);
+}
+
+.nav-btn--icon {
+    padding: var(--spacing-sm);
+    line-height: 0;
+}
+
+.nav-btn--icon svg {
+    display: block;
+    width: 20px;
+    height: 20px;
 }
 
 /* Views */
@@ -2199,6 +2214,15 @@ body.no-scroll {
     .checkbox-label input[type="checkbox"] {
         width: 22px;
         height: 22px;
+    }
+
+    .nav-btn {
+        min-height: 44px;
+    }
+
+    .nav-btn--icon {
+        min-width: 44px;
+        min-height: 44px;
     }
 }
 
