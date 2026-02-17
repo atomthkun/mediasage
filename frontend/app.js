@@ -65,8 +65,7 @@ const state = {
     _pendingClientId: null,    // Client ID awaiting play choice modal selection
 
     // Instant Queue (005) — Update Existing
-    saveMode: 'new',           // 'new' | 'update'
-    updateMode: 'replace',     // 'replace' | 'append'
+    saveMode: 'new',           // 'new' | 'replace' | 'append'
     selectedPlaylistId: null,
     plexPlaylists: [],         // Cached after first fetch (FR-017)
 };
@@ -83,6 +82,32 @@ function escapeHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+function artistHue(name) {
+    if (!name) return -1;
+    let h = 5381;
+    for (let i = 0; i < name.length; i++) h = ((h << 5) + h + name.charCodeAt(i)) >>> 0;
+    return h % 360;
+}
+
+function artPlaceholderHtml(artist, large = false) {
+    const hue = artistHue(artist);
+    const letter = artist ? artist.charAt(0).toUpperCase() : '\u266B';
+    const bg = hue >= 0 ? `hsl(${hue},30%,20%)` : 'hsl(0,0%,20%)';
+    const fg = hue >= 0 ? `hsl(${hue},40%,60%)` : 'hsl(0,0%,55%)';
+    const glow = large && hue >= 0 ? `background-image:radial-gradient(circle,hsl(${hue},40%,35%) 0%,transparent 70%);` : '';
+    return `<div class="art-placeholder" style="background-color:${bg};color:${fg};${glow}">${escapeHtml(letter)}</div>`;
+}
+
+function trackArtHtml(track) {
+    if (track.art_url) {
+        return `<img class="track-art" src="${escapeHtml(track.art_url)}"
+                     alt="${escapeHtml(track.album)}" loading="lazy"
+                     data-artist="${escapeHtml(track.artist || '')}"
+                     onerror="this.outerHTML=artPlaceholderHtml(this.dataset.artist)">`;
+    }
+    return artPlaceholderHtml(track.artist);
 }
 
 async function apiCall(endpoint, options = {}) {
@@ -586,6 +611,10 @@ function updateStep() {
     const appEl = document.querySelector('.app');
     if (appEl) appEl.classList.toggle('app--wide', isResults);
 
+    // Toggle footer content for results vs other screens
+    const appFooter = document.querySelector('.app-footer');
+    if (appFooter) appFooter.classList.toggle('app-footer--results', isResults);
+
     // Update step progress indicators
     const steps = ['input', 'dimensions', 'filters', 'results'];
     const currentIndex = steps.indexOf(state.step);
@@ -912,26 +941,10 @@ function renderNarrativeBox() {
     }
 
     container.classList.remove('hidden');
-    container.classList.remove('expanded');
 
     container.innerHTML = `
         <p class="narrative-text">${escapeHtml(state.narrative)}</p>
-        <button class="narrative-toggle" hidden>Show more</button>
     `;
-
-    // Show toggle only if text is actually clamped
-    const textEl = container.querySelector('.narrative-text');
-    const toggleBtn = container.querySelector('.narrative-toggle');
-    requestAnimationFrame(() => {
-        if (textEl.scrollHeight > textEl.clientHeight + 2) {
-            toggleBtn.hidden = false;
-        }
-    });
-
-    toggleBtn.addEventListener('click', () => {
-        const expanded = container.classList.toggle('expanded');
-        toggleBtn.textContent = expanded ? 'Show less' : 'Show more';
-    });
 
     // Update prompt pill
     const promptPill = document.getElementById('results-prompt-pill');
@@ -967,18 +980,14 @@ function showTrackReason(ratingKey) {
     const reason = state.trackReasons[ratingKey] || 'Selected for this playlist';
 
     // Update album art
-    const artImg = panel.querySelector('.reason-album-art');
     const artContainer = panel.querySelector('.reason-album-art-container');
-    if (artImg && artContainer) {
+    if (artContainer) {
         if (track.art_url) {
-            artImg.src = track.art_url;
-            artImg.alt = `${track.album} album art`;
-            artImg.hidden = false;
-            artContainer.style.display = '';
+            artContainer.innerHTML = `<img class="reason-album-art" src="${escapeHtml(track.art_url)}" alt="${escapeHtml(track.album)} album art" data-artist="${escapeHtml(track.artist || '')}" onerror="this.outerHTML=artPlaceholderHtml(this.dataset.artist,true)">`;
         } else {
-            artImg.hidden = true;
-            artContainer.style.display = 'none';
+            artContainer.innerHTML = artPlaceholderHtml(track.artist, true);
         }
+        artContainer.style.display = '';
     }
 
     // Update panel content
@@ -1048,8 +1057,7 @@ function updatePlaylist() {
              data-rating-key="${escapeHtml(track.rating_key)}"
              aria-selected="false">
             <span class="track-number">${index + 1}</span>
-            <img class="track-art" src="${escapeHtml(track.art_url || '/static/placeholder.png')}"
-                 alt="${escapeHtml(track.album)}" onerror="this.style.display='none'">
+            ${trackArtHtml(track)}
             <div class="track-info">
                 <div class="track-title">${escapeHtml(track.title)}</div>
                 <div class="track-artist">${escapeHtml(track.artist)} - ${escapeHtml(track.album)}</div>
@@ -1104,21 +1112,16 @@ function updatePlaylist() {
 }
 
 function updateResultsFooter() {
-    const trackCountEl = document.getElementById('results-footer-track-count');
     const headerTrackCountEl = document.getElementById('results-track-count');
     const costDisplay = document.getElementById('cost-display');
-    const footer = document.querySelector('.results-footer');
-
-    if (!footer) return;
 
     const count = state.playlist.length;
 
-    // Update track counts
-    const trackText = `${count} track${count !== 1 ? 's' : ''}`;
-    if (trackCountEl) trackCountEl.textContent = trackText;
+    // Update header track count
+    const trackText = `\u266B ${count} track${count !== 1 ? 's' : ''}`;
     if (headerTrackCountEl) headerTrackCountEl.textContent = trackText;
 
-    // Update cost display
+    // Update cost display in app footer
     const isLocalProvider = state.config?.is_local_provider ?? false;
     if (costDisplay) {
         if (isLocalProvider) {
@@ -1128,8 +1131,8 @@ function updateResultsFooter() {
         }
     }
 
-    // Hide footer if empty
-    footer.style.display = count === 0 ? 'none' : '';
+    // Keep append track count in sync
+    updateAppendTrackCount();
 }
 
 function updateSettings() {
@@ -1515,8 +1518,22 @@ function setLoading(loading, message = 'Loading...', substeps = null) {
     document.body.classList.toggle('no-scroll', loading);
     messageEl.textContent = message;
 
+    const contentEl = overlay.querySelector('.loading-modal-content');
     if (substepEl) {
         if (loading && substeps && substeps.length > 0) {
+            // Pre-measure the widest substep to prevent layout shifts
+            if (contentEl) {
+                const allTexts = [message, ...substeps];
+                substepEl.style.visibility = 'hidden';
+                let maxWidth = contentEl.offsetWidth;
+                for (const text of allTexts) {
+                    substepEl.textContent = text;
+                    maxWidth = Math.max(maxWidth, contentEl.scrollWidth);
+                }
+                contentEl.style.minWidth = maxWidth + 'px';
+                substepEl.style.visibility = '';
+            }
+
             // Show progressive substeps
             let stepIndex = 0;
             substepEl.textContent = substeps[0];
@@ -1530,6 +1547,7 @@ function setLoading(loading, message = 'Loading...', substeps = null) {
             }, 2000); // Change message every 2 seconds
         } else {
             substepEl.textContent = '';
+            if (contentEl) contentEl.style.minWidth = '';
         }
     }
 }
@@ -2030,21 +2048,9 @@ function setupEventListeners() {
     // Save mode dropdown toggle
     document.getElementById('save-mode-dropdown-btn').addEventListener('click', toggleSaveModeDropdown);
 
-    // Save mode option selection (New Playlist / Update Existing)
+    // Save mode option selection (Create / Replace / Append)
     document.querySelectorAll('.save-mode-option').forEach(opt => {
         opt.addEventListener('click', () => setSaveMode(opt.dataset.mode));
-    });
-
-    // Update mode toggle (Replace / Append)
-    document.querySelectorAll('.toggle-btn[data-update-mode]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            state.updateMode = btn.dataset.updateMode;
-            document.querySelectorAll('.toggle-btn[data-update-mode]').forEach(b => {
-                const isActive = b.dataset.updateMode === state.updateMode;
-                b.classList.toggle('active', isActive);
-                b.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-            });
-        });
     });
 
     // Playlist picker change
@@ -2167,8 +2173,7 @@ function renderSearchResults(tracks) {
 
     container.innerHTML = tracks.map(track => `
         <div class="search-result-item" data-rating-key="${escapeHtml(track.rating_key)}">
-            <img class="track-art" src="${escapeHtml(track.art_url || '')}"
-                 alt="${escapeHtml(track.album)}" onerror="this.style.display='none'">
+            ${trackArtHtml(track)}
             <div class="track-info">
                 <div class="track-title">${escapeHtml(track.title)}</div>
                 <div class="track-artist">${escapeHtml(track.artist)} - ${escapeHtml(track.album)}</div>
@@ -2235,8 +2240,7 @@ function renderSeedTrack() {
     const track = state.seedTrack;
 
     container.innerHTML = `
-        <img class="track-art" src="${escapeHtml(track.art_url || '')}"
-             alt="${escapeHtml(track.album)}" onerror="this.style.display='none'">
+        ${trackArtHtml(track)}
         <div class="track-info">
             <div class="track-title">${escapeHtml(track.title)}</div>
             <div class="track-artist">${escapeHtml(track.artist)} - ${escapeHtml(track.album)}</div>
@@ -2382,8 +2386,8 @@ function generatePlaylistName() {
 }
 
 async function handleSavePlaylist() {
-    // Route to update handler when in update mode
-    if (state.saveMode === 'update') {
+    // Route to update handler when in replace/append mode
+    if (state.saveMode === 'replace' || state.saveMode === 'append') {
         await handleUpdatePlaylist();
         return;
     }
@@ -2734,6 +2738,14 @@ async function fetchAndPopulatePlaylists() {
     }
 }
 
+function updateAppendTrackCount() {
+    if (state.saveMode !== 'append') return;
+
+    const count = state.playlist.length;
+    const saveBtn = document.getElementById('save-playlist-btn');
+    if (saveBtn) saveBtn.textContent = `Add ${count} track${count !== 1 ? 's' : ''}`;
+}
+
 function setSaveMode(mode) {
     state.saveMode = mode;
 
@@ -2757,8 +2769,14 @@ function setSaveMode(mode) {
         saveBtn.textContent = 'Create Playlist';
         nameContainer.classList.remove('hidden');
         pickerContainer.classList.add('hidden');
-    } else {
-        saveBtn.textContent = 'Update Playlist';
+    } else if (mode === 'replace') {
+        saveBtn.textContent = 'Replace all tracks';
+        nameContainer.classList.add('hidden');
+        pickerContainer.classList.remove('hidden');
+        fetchAndPopulatePlaylists();
+    } else if (mode === 'append') {
+        const count = state.playlist.length;
+        saveBtn.textContent = `Add ${count} track${count !== 1 ? 's' : ''}`;
         nameContainer.classList.add('hidden');
         pickerContainer.classList.remove('hidden');
         fetchAndPopulatePlaylists();
@@ -2790,7 +2808,7 @@ async function handleUpdatePlaylist() {
         const response = await sendPlaylistUpdate(
             playlistId,
             ratingKeys,
-            state.updateMode,
+            state.saveMode,
             state.narrative,
         );
 
@@ -2798,7 +2816,7 @@ async function handleUpdatePlaylist() {
         if (response.success) {
             // Show update success modal with mode-aware message
             let message;
-            if (state.updateMode === 'append') {
+            if (state.saveMode === 'append') {
                 message = `Updated ${playlistTitle} — Added ${response.tracks_added} tracks`;
                 if (response.duplicates_skipped > 0) {
                     message += ` (${response.duplicates_skipped} duplicates skipped)`;
@@ -2861,8 +2879,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Restore save mode from localStorage AFTER config loads (US3 — T017)
     const savedMode = localStorage.getItem('mediasage-save-mode');
-    if (savedMode === 'update') {
-        setSaveMode('update');
+    if (savedMode === 'replace' || savedMode === 'append') {
+        setSaveMode(savedMode);
     }
 });
 
