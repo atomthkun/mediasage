@@ -2889,12 +2889,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // Restore save mode from localStorage AFTER config loads (US3 — T017)
+    let initialMode = 'new';
     try {
         const savedMode = localStorage.getItem('mediasage-save-mode');
         if (savedMode === 'replace' || savedMode === 'append') {
-            setSaveMode(savedMode);
+            initialMode = savedMode;
         }
     } catch (e) { /* private browsing / storage disabled */ }
+    setSaveMode(initialMode);
 });
 
 // Export for global access
