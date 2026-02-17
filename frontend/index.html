@@ -191,65 +191,82 @@
 
                     <!-- Results Step -->
                     <div id="step-results" class="step-panel">
-                        <div class="results-header">
-                            <h2>Your Playlist</h2>
-                            <div class="cost-display" id="cost-display"></div>
-                        </div>
-                        <div class="playlist-name-container">
-                            <input
-                                type="text"
-                                id="playlist-name-input"
-                                class="playlist-name-input"
-                                placeholder="Enter playlist name..."
-                                aria-label="Playlist name"
-                            >
-                        </div>
-                        <div id="playlist-picker-container" class="playlist-picker-container hidden">
-                            <select id="playlist-picker" class="playlist-picker-select" aria-label="Select playlist to update">
-                                <option value="__scratch__">MediaSage - Now Playing</option>
-                            </select>
-                            <div class="update-mode-toggle" role="group" aria-label="Update mode">
-                                <button class="toggle-btn active" data-update-mode="replace" aria-pressed="true">Replace</button>
-                                <button class="toggle-btn" data-update-mode="append" aria-pressed="false">Append</button>
+                        <button id="back-to-filters-btn" class="results-back-link">&larr; Back to filters</button>
+
+                        <div class="results-header-bar">
+                            <div class="results-header-left">
+                                <div class="playlist-name-container">
+                                    <input
+                                        type="text"
+                                        id="playlist-name-input"
+                                        class="playlist-name-input"
+                                        placeholder="Enter playlist name..."
+                                        aria-label="Playlist name"
+                                    >
+                                </div>
+                                <div id="playlist-picker-container" class="playlist-picker-container hidden">
+                                    <select id="playlist-picker" class="playlist-picker-select" aria-label="Select playlist to update">
+                                        <option value="__scratch__">MediaSage - Now Playing</option>
+                                    </select>
+                                    <div class="update-mode-toggle" role="group" aria-label="Update mode">
+                                        <button class="toggle-btn active" data-update-mode="replace" aria-pressed="true">Replace</button>
+                                        <button class="toggle-btn" data-update-mode="append" aria-pressed="false">Append</button>
+                                    </div>
+                                </div>
+                                <div id="narrative-box" class="narrative-box hidden"></div>
+                                <div class="results-header-meta">
+                                    <span id="results-track-count" class="meta-pill"></span>
+                                    <span id="results-prompt-pill" class="prompt-pill hidden"></span>
+                                </div>
+                            </div>
+                            <div class="results-header-actions">
+                                <div class="split-button-group">
+                                    <button id="save-playlist-btn" class="btn btn-primary split-button-main">
+                                        Create Playlist
+                                    </button>
+                                    <button id="save-mode-dropdown-btn" class="btn btn-primary split-button-arrow" aria-label="Save mode options" aria-expanded="false">
+                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                    </button>
+                                    <div id="save-mode-dropdown" class="save-mode-dropdown hidden" role="menu">
+                                        <button class="save-mode-option active" data-mode="new" role="menuitem">
+                                            <span class="save-mode-check">&#10003;</span> Create New Playlist
+                                        </button>
+                                        <button class="save-mode-option" data-mode="update" role="menuitem">
+                                            <span class="save-mode-check"></span> Update Existing Playlist
+                                        </button>
+                                    </div>
+                                </div>
+                                <button id="play-now-btn" class="btn btn-secondary btn-play-now">
+                                    &#9654; Play Now
+                                </button>
+                                <button id="regenerate-btn" class="btn-link regenerate-link">
+                                    &#8635; Regenerate
+                                </button>
                             </div>
                         </div>
-                        <!-- Narrative Box -->
-                        <div id="narrative-box" class="narrative-box hidden"></div>
+
                         <div class="results-layout">
                             <div id="playlist-tracks" class="playlist-tracks" role="list" aria-label="Generated playlist"></div>
                             <aside id="track-reason-panel" class="track-reason-panel">
-                                <div class="reason-placeholder">Hover over a track to see why it was chosen</div>
+                                <div class="reason-placeholder">Click a track to see why it was chosen</div>
                                 <div class="reason-content hidden">
+                                    <div class="reason-album-art-container">
+                                        <img class="reason-album-art" src="" alt="" hidden>
+                                    </div>
                                     <div class="reason-track-title"></div>
                                     <div class="reason-track-artist"></div>
                                     <p class="reason-text"></p>
                                 </div>
                             </aside>
-                            <div class="results-actions">
-                            <div class="split-button-group">
-                                <button id="save-playlist-btn" class="btn btn-primary split-button-main">
-                                    Create Playlist
-                                </button>
-                                <button id="save-mode-dropdown-btn" class="btn btn-primary split-button-arrow" aria-label="Save mode options" aria-expanded="false">
-                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                                </button>
-                                <div id="save-mode-dropdown" class="save-mode-dropdown hidden" role="menu">
-                                    <button class="save-mode-option active" data-mode="new" role="menuitem">
-                                        <span class="save-mode-check">&#10003;</span> Create New Playlist
-                                    </button>
-                                    <button class="save-mode-option" data-mode="update" role="menuitem">
-                                        <span class="save-mode-check"></span> Update Existing Playlist
-                                    </button>
-                                </div>
+                        </div>
+
+                        <div class="results-footer">
+                            <div class="results-footer-left">
+                                <span id="results-footer-track-count"></span>
                             </div>
-                            <div class="or-divider" aria-hidden="true">or</div>
-                            <button id="play-now-btn" class="btn btn-secondary btn-play-now">
-                                &#9654; Play Now
-                            </button>
-                            <p class="play-now-helper">Queue on a Plex client without saving a playlist</p>
-                            <button id="regenerate-btn" class="btn-link regenerate-link">
-                                &#8635; Regenerate
-                            </button>
+                            <div class="results-footer-right">
+                                <span class="cost-display" id="cost-display"></span>
+                            </div>
                         </div>
                     </div>
                 </div>

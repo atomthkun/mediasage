@@ -57,6 +57,9 @@ const state = {
     // Cached filter preview (for local cost recalculation)
     lastFilterPreview: null,  // { matching_tracks, tracks_to_send }
 
+    // Results UX — selection
+    selectedTrackKey: null,    // Currently selected track in detail panel
+
     // Instant Queue (005) — Play Now
     plexClients: [],           // Never cached — fetched fresh each time (FR-016)
     _pendingClientId: null,    // Client ID awaiting play choice modal selection
@@ -897,15 +900,37 @@ function renderNarrativeBox() {
     }
 
     container.classList.remove('hidden');
-
-    const requestHtml = state.userRequest
-        ? `<p class="narrative-request">↳ "${escapeHtml(state.userRequest)}"</p>`
-        : '';
+    container.classList.remove('expanded');
 
     container.innerHTML = `
         <p class="narrative-text">${escapeHtml(state.narrative)}</p>
-        ${requestHtml}
+        <button class="narrative-toggle" hidden>Show more</button>
     `;
+
+    // Show toggle only if text is actually clamped
+    const textEl = container.querySelector('.narrative-text');
+    const toggleBtn = container.querySelector('.narrative-toggle');
+    requestAnimationFrame(() => {
+        if (textEl.scrollHeight > textEl.clientHeight + 2) {
+            toggleBtn.hidden = false;
+        }
+    });
+
+    toggleBtn.addEventListener('click', () => {
+        const expanded = container.classList.toggle('expanded');
+        toggleBtn.textContent = expanded ? 'Show less' : 'Show more';
+    });
+
+    // Update prompt pill
+    const promptPill = document.getElementById('results-prompt-pill');
+    if (promptPill) {
+        if (state.userRequest) {
+            promptPill.textContent = `\u{1F4AC} "${escapeHtml(state.userRequest)}"`;
+            promptPill.classList.remove('hidden');
+        } else {
+            promptPill.classList.add('hidden');
+        }
+    }
 }
 
 function showTrackReason(ratingKey) {
@@ -929,6 +954,21 @@ function showTrackReason(ratingKey) {
     // Get reason for this track
     const reason = state.trackReasons[ratingKey] || 'Selected for this playlist';
 
+    // Update album art
+    const artImg = panel.querySelector('.reason-album-art');
+    const artContainer = panel.querySelector('.reason-album-art-container');
+    if (artImg && artContainer) {
+        if (track.art_url) {
+            artImg.src = track.art_url;
+            artImg.alt = `${track.album} album art`;
+            artImg.hidden = false;
+            artContainer.style.display = '';
+        } else {
+            artImg.hidden = true;
+            artContainer.style.display = 'none';
+        }
+    }
+
     // Update panel content
     panel.querySelector('.reason-track-title').textContent = track.title;
     panel.querySelector('.reason-track-artist').textContent = `${track.artist} - ${track.album}`;
@@ -937,6 +977,20 @@ function showTrackReason(ratingKey) {
     // Show content, hide placeholder
     placeholder.classList.add('hidden');
     content.classList.remove('hidden');
+}
+
+function selectTrack(ratingKey) {
+    state.selectedTrackKey = ratingKey;
+
+    // Toggle .selected class on track rows
+    document.querySelectorAll('.playlist-track').forEach(el => {
+        const isSelected = el.dataset.ratingKey === ratingKey;
+        el.classList.toggle('selected', isSelected);
+        el.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+    });
+
+    // Update detail panel
+    showTrackReason(ratingKey);
 }
 
 function isMobileView() {
@@ -973,12 +1027,14 @@ function closeBottomSheet() {
 }
 
 function updatePlaylist() {
-    // Render narrative box above track list
+    // Render narrative box
     renderNarrativeBox();
 
     const container = document.getElementById('playlist-tracks');
     container.innerHTML = state.playlist.map((track, index) => `
-        <div class="playlist-track" data-rating-key="${escapeHtml(track.rating_key)}">
+        <div class="playlist-track" role="option" tabindex="0"
+             data-rating-key="${escapeHtml(track.rating_key)}"
+             aria-selected="false">
             <span class="track-number">${index + 1}</span>
             <img class="track-art" src="${escapeHtml(track.art_url || '/static/placeholder.png')}"
                  alt="${escapeHtml(track.album)}" onerror="this.style.display='none'">
@@ -990,46 +1046,78 @@ function updatePlaylist() {
         </div>
     `).join('');
 
-    // Add hover handlers for desktop side panel and click handlers for mobile bottom sheet
+    // Click handlers: desktop = select track, mobile = open bottom sheet
     container.querySelectorAll('.playlist-track').forEach(trackEl => {
-        // Desktop: hover to show reason in side panel
-        trackEl.addEventListener('mouseenter', () => {
-            if (!isMobileView()) {
-                showTrackReason(trackEl.dataset.ratingKey);
-            }
-        });
-
-        // Desktop: clear panel when mouse leaves
-        trackEl.addEventListener('mouseleave', () => {
-            if (!isMobileView()) {
-                showTrackReason(null);
-            }
-        });
-
-        // Mobile: tap to open bottom sheet (but not on remove button)
         trackEl.addEventListener('click', (e) => {
             if (e.target.closest('.track-remove')) return;
             if (isMobileView()) {
                 openBottomSheet(trackEl.dataset.ratingKey);
+            } else {
+                selectTrack(trackEl.dataset.ratingKey);
+            }
+        });
+
+        // Keyboard: Enter/Space to select
+        trackEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                if (isMobileView()) {
+                    openBottomSheet(trackEl.dataset.ratingKey);
+                } else {
+                    selectTrack(trackEl.dataset.ratingKey);
+                }
             }
         });
     });
 
-    // Reset side panel to placeholder
-    showTrackReason(null);
-
-    // Update cost display (actual costs from API responses)
-    // For local providers, show tokens only (no dollar cost)
-    const costDisplay = document.getElementById('cost-display');
-    const isLocalProvider = state.config?.is_local_provider ?? false;
-    if (isLocalProvider) {
-        costDisplay.textContent = `${state.tokenCount.toLocaleString()} tokens`;
-    } else {
-        costDisplay.textContent = `${state.tokenCount.toLocaleString()} tokens ($${state.estimatedCost.toFixed(4)})`;
+    // Auto-select: restore previous selection or pick first track (desktop)
+    if (!isMobileView() && state.playlist.length > 0) {
+        const hasSelected = state.selectedTrackKey &&
+            state.playlist.some(t => t.rating_key === state.selectedTrackKey);
+        if (hasSelected) {
+            selectTrack(state.selectedTrackKey);
+        } else {
+            selectTrack(state.playlist[0].rating_key);
+        }
+    } else if (state.playlist.length === 0) {
+        state.selectedTrackKey = null;
+        showTrackReason(null);
     }
+
+    // Update footer
+    updateResultsFooter();
 
     // Update playlist name input
     document.getElementById('playlist-name-input').value = state.playlistName;
+}
+
+function updateResultsFooter() {
+    const trackCountEl = document.getElementById('results-footer-track-count');
+    const headerTrackCountEl = document.getElementById('results-track-count');
+    const costDisplay = document.getElementById('cost-display');
+    const footer = document.querySelector('.results-footer');
+
+    if (!footer) return;
+
+    const count = state.playlist.length;
+
+    // Update track counts
+    const trackText = `${count} track${count !== 1 ? 's' : ''}`;
+    if (trackCountEl) trackCountEl.textContent = trackText;
+    if (headerTrackCountEl) headerTrackCountEl.textContent = trackText;
+
+    // Update cost display
+    const isLocalProvider = state.config?.is_local_provider ?? false;
+    if (costDisplay) {
+        if (isLocalProvider) {
+            costDisplay.textContent = `${state.tokenCount.toLocaleString()} tokens`;
+        } else {
+            costDisplay.textContent = `${state.tokenCount.toLocaleString()} tokens ($${state.estimatedCost.toFixed(4)})`;
+        }
+    }
+
+    // Hide footer if empty
+    footer.style.display = count === 0 ? 'none' : '';
 }
 
 function updateSettings() {
@@ -1505,6 +1593,7 @@ function resetPlaylistState() {
     state.narrative = '';
     state.trackReasons = {};
     state.userRequest = '';
+    state.selectedTrackKey = null;
     document.getElementById('prompt-input').value = '';
     updateStep();
 }
@@ -1825,13 +1914,25 @@ function setupEventListeners() {
     // Regenerate
     document.getElementById('regenerate-btn').addEventListener('click', handleGenerate);
 
-    // Remove track
+    // Remove track (with selection management)
     document.getElementById('playlist-tracks').addEventListener('click', e => {
         const removeBtn = e.target.closest('.track-remove');
         if (!removeBtn) return;
 
         const ratingKey = removeBtn.dataset.ratingKey;
+        const removedIndex = state.playlist.findIndex(t => t.rating_key === ratingKey);
         state.playlist = state.playlist.filter(t => t.rating_key !== ratingKey);
+
+        // If removed track was selected, auto-select next or first
+        if (state.selectedTrackKey === ratingKey) {
+            if (state.playlist.length > 0) {
+                const nextIndex = Math.min(removedIndex, state.playlist.length - 1);
+                state.selectedTrackKey = state.playlist[nextIndex].rating_key;
+            } else {
+                state.selectedTrackKey = null;
+            }
+        }
+
         updatePlaylist();
     });
 
