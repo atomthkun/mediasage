@@ -2769,7 +2769,7 @@ function populateClientList(clients) {
         <div class="client-item" data-client-id="${escapeHtml(client.client_id)}"
              role="option" tabindex="0"
              aria-label="${escapeHtml(client.name)} — ${escapeHtml(client.product)} on ${escapeHtml(client.platform)} — ${status.text}">
-            <div class="client-status-dot ${client.is_playing ? 'playing' : 'idle'}" aria-hidden="true"></div>
+            <div class="client-status-dot ${client.is_playing ? 'playing' : (client.is_mobile ? 'mobile' : 'idle')}" aria-hidden="true"></div>
             <div class="client-info">
                 <div class="client-name">${escapeHtml(client.name)}</div>
                 <span class="client-product-badge">${escapeHtml(client.product)}</span>

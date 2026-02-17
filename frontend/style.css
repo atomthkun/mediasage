@@ -2040,6 +2040,10 @@ input[type="number"]:focus:not(:focus-visible) {
     background: var(--success);
 }
 
+.client-status-dot.mobile {
+    background: var(--warning);
+}
+
 .client-picker-hint {
     display: flex;
     align-items: center;
