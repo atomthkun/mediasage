@@ -818,12 +818,14 @@ class TestPlexClientPlayQueue:
 class TestPlexClientGetPlaylists:
     """Tests for get_playlists() method that returns audio playlists."""
 
-    def _make_mock_playlist(self, rating_key=1, title="Test Playlist", leaf_count=10):
+    def _make_mock_playlist(self, rating_key=1, title="Test Playlist", leaf_count=10, smart=False, radio=False):
         """Helper to create a mock Plex playlist object."""
         playlist = MagicMock()
         playlist.ratingKey = rating_key
         playlist.title = title
         playlist.leafCount = leaf_count
+        playlist.smart = smart
+        playlist.radio = radio
         return playlist
 
     def test_get_playlists_returns_audio_playlists(self):
@@ -889,6 +891,25 @@ class TestPlexClientGetPlaylists:
             playlists = plex.get_playlists()
 
         assert playlists == []
+
+    def test_get_playlists_excludes_smart_and_radio(self):
+        """Should exclude smart playlists and radio playlists from results."""
+        from backend.plex_client import PlexClient
+
+        regular = self._make_mock_playlist(rating_key=1, title="My Mix", leaf_count=10)
+        smart = self._make_mock_playlist(rating_key=2, title="Favorite Songs", leaf_count=50, smart=True)
+        radio = self._make_mock_playlist(rating_key=3, title="Radio Station", leaf_count=0, radio=True)
+
+        mock_server = MagicMock()
+        mock_server.library.section.return_value = MagicMock()
+        mock_server.playlists.return_value = [regular, smart, radio]
+
+        with patch("backend.plex_client.PlexServer", return_value=mock_server):
+            plex = PlexClient("http://localhost:32400", "token", "Music")
+            playlists = plex.get_playlists()
+
+        assert len(playlists) == 1
+        assert playlists[0].title == "My Mix"
 
 
 class TestPlexClientUpdatePlaylist:

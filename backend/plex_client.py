@@ -843,6 +843,7 @@ class PlexClient:
                     track_count=playlist.leafCount,
                 )
                 for playlist in playlists
+                if not playlist.smart and not playlist.radio
             ]
             return sorted(result, key=lambda p: p.title.lower())
         except Exception as e:
