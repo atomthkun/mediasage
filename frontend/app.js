@@ -2607,6 +2607,7 @@ function populateClientList(clients) {
 async function refreshClientList() {
     const listEl = document.getElementById('client-list');
     const emptyState = document.getElementById('client-empty-state');
+    emptyState.querySelector('p').textContent = 'No Plex clients active. Open Plexamp or Plex first.';
     emptyState.classList.add('hidden');
     listEl.innerHTML = '<div class="client-loading"><div class="spinner"></div><p>Finding devices...</p></div>';
 
@@ -2615,8 +2616,10 @@ async function refreshClientList() {
         state.plexClients = clients;
         populateClientList(clients);
     } catch (error) {
-        dismissClientPicker();
-        showError('Failed to find devices: ' + error.message);
+        // Show error inline in the picker so user can retry with refresh button
+        listEl.innerHTML = '';
+        emptyState.querySelector('p').textContent = 'Failed to find devices. Check that Plex is running.';
+        emptyState.classList.remove('hidden');
     }
 }
 
