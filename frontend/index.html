@@ -191,40 +191,69 @@
 
                     <!-- Results Step -->
                     <div id="step-results" class="step-panel">
-                        <div class="results-header">
-                            <h2>Your Playlist</h2>
-                            <div class="cost-display" id="cost-display"></div>
+                        <button id="back-to-filters-btn" class="results-back-link">&larr; Back to filters</button>
+
+                        <div class="results-header-bar">
+                            <div class="results-header-left">
+                                <div class="playlist-name-container">
+                                    <input
+                                        type="text"
+                                        id="playlist-name-input"
+                                        class="playlist-name-input"
+                                        placeholder="Enter playlist name..."
+                                        aria-label="Playlist name"
+                                    >
+                                </div>
+                                <div id="playlist-picker-container" class="playlist-picker-container hidden">
+                                    <select id="playlist-picker" class="playlist-picker-select" aria-label="Select playlist to update">
+                                        <option value="__scratch__">MediaSage - Now Playing</option>
+                                    </select>
+                                </div>
+                                <div id="narrative-box" class="narrative-box hidden"></div>
+                                <div class="results-header-meta">
+                                    <span id="results-track-count" class="meta-pill"></span>
+                                    <span id="results-prompt-pill" class="prompt-pill hidden"></span>
+                                </div>
+                            </div>
+                            <div class="results-header-actions">
+                                <div class="split-button-group">
+                                    <button id="save-playlist-btn" class="btn btn-primary split-button-main">
+                                        Create Playlist
+                                    </button>
+                                    <button id="save-mode-dropdown-btn" class="btn btn-primary split-button-arrow" aria-label="Save mode options" aria-expanded="false">
+                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                    </button>
+                                    <div id="save-mode-dropdown" class="save-mode-dropdown hidden" role="menu">
+                                        <button class="save-mode-option active" data-mode="new" role="menuitem">
+                                            <span class="save-mode-check">&#10003;</span> Create new playlist
+                                        </button>
+                                        <button class="save-mode-option" data-mode="replace" role="menuitem">
+                                            <span class="save-mode-check"></span> Replace a playlist
+                                        </button>
+                                        <button class="save-mode-option" data-mode="append" role="menuitem">
+                                            <span class="save-mode-check"></span> Append to a playlist
+                                        </button>
+                                    </div>
+                                </div>
+                                <button id="play-now-btn" class="btn btn-secondary btn-play-now">
+                                    &#9654; Play Now
+                                </button>
+                            </div>
                         </div>
-                        <div class="playlist-name-container">
-                            <input
-                                type="text"
-                                id="playlist-name-input"
-                                class="playlist-name-input"
-                                placeholder="Enter playlist name..."
-                                aria-label="Playlist name"
-                            >
-                        </div>
-                        <!-- Narrative Box -->
-                        <div id="narrative-box" class="narrative-box hidden"></div>
+
                         <div class="results-layout">
                             <div id="playlist-tracks" class="playlist-tracks" role="list" aria-label="Generated playlist"></div>
                             <aside id="track-reason-panel" class="track-reason-panel">
-                                <div class="reason-placeholder">Hover over a track to see why it was chosen</div>
+                                <div class="reason-placeholder">Click a track to see why it was chosen</div>
                                 <div class="reason-content hidden">
+                                    <div class="reason-album-art-container"></div>
                                     <div class="reason-track-title"></div>
                                     <div class="reason-track-artist"></div>
                                     <p class="reason-text"></p>
                                 </div>
                             </aside>
                         </div>
-                        <div class="results-actions">
-                            <button id="regenerate-btn" class="btn btn-secondary">
-                                Regenerate
-                            </button>
-                            <button id="save-playlist-btn" class="btn btn-primary">
-                                Save to Plex
-                            </button>
-                        </div>
+
                     </div>
                 </div>
 
@@ -260,6 +289,81 @@
                             <a id="open-in-plex-btn" class="btn btn-plex" href="#" target="_blank" rel="noopener">Open in Plex <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/><path d="m21 3-9 9"/><path d="M15 3h6v6"/></svg></a>
                             <button id="new-playlist-btn" class="btn btn-primary">Start New Playlist</button>
                             <button class="btn btn-secondary" onclick="dismissSuccessModal()">Back to Playlist</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Client Picker Modal -->
+                <div id="client-picker-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="client-picker-title">
+                    <div class="modal-card">
+                        <button class="modal-close" onclick="dismissClientPicker()" aria-label="Close">&times;</button>
+                        <h2 id="client-picker-title">Select a Device</h2>
+                        <div id="client-list" class="client-list" role="listbox" aria-label="Available devices"></div>
+                        <div id="client-empty-state" class="client-empty-state hidden">
+                            <p>No Plex clients active. Open Plexamp or Plex first.</p>
+                            <button id="refresh-clients-btn" class="btn btn-secondary">Refresh</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Play Mode Choice Modal -->
+                <div id="play-choice-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="play-choice-title">
+                    <div class="modal-card">
+                        <button class="modal-close" onclick="dismissPlayChoice()" aria-label="Close">&times;</button>
+                        <h2 id="play-choice-title">Device is currently playing</h2>
+                        <p class="play-choice-description">What would you like to do?</p>
+                        <div class="play-choice-buttons">
+                            <button id="replace-queue-btn" class="btn btn-primary play-choice-btn">Replace Queue</button>
+                            <button id="play-next-btn" class="btn btn-secondary play-choice-btn">Play Next</button>
+                        </div>
+                        <button class="btn-link modal-cancel" onclick="dismissPlayChoice()">Cancel</button>
+                    </div>
+                </div>
+
+                <!-- Play Now Success Modal -->
+                <div id="play-success-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="play-success-title">
+                    <div class="modal-card modal-card--success">
+                        <button class="modal-close" onclick="dismissPlaySuccess()" aria-label="Close">&times;</button>
+                        <div class="success-hero">
+                            <div class="success-ring" aria-hidden="true">
+                                <svg class="success-ring-svg" viewBox="0 0 48 48" fill="none">
+                                    <circle class="success-ring-bg" cx="24" cy="24" r="22" stroke-width="3"/>
+                                    <circle class="success-ring-progress" cx="24" cy="24" r="22" stroke-width="3"/>
+                                </svg>
+                                <div class="success-ring-icon">&#9654;</div>
+                            </div>
+                            <h2 id="play-success-title">Now Playing</h2>
+                        </div>
+                        <div class="success-details">
+                            <p id="play-success-message" class="success-detail-line"></p>
+                        </div>
+                        <div class="success-actions">
+                            <button class="btn btn-ghost" onclick="dismissPlaySuccess()">Back to Tracks</button>
+                            <button id="play-success-new-btn" class="btn btn-primary">New Playlist</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Update Success Modal -->
+                <div id="update-success-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="update-success-title">
+                    <div class="modal-card modal-card--success">
+                        <button class="modal-close" onclick="dismissUpdateSuccess()" aria-label="Close">&times;</button>
+                        <div class="success-hero">
+                            <div class="success-ring" aria-hidden="true">
+                                <svg class="success-ring-svg" viewBox="0 0 48 48" fill="none">
+                                    <circle class="success-ring-bg" cx="24" cy="24" r="22" stroke-width="3"/>
+                                    <circle class="success-ring-progress" cx="24" cy="24" r="22" stroke-width="3"/>
+                                </svg>
+                                <div class="success-ring-icon">&#10003;</div>
+                            </div>
+                            <h2 id="update-success-title">Playlist Updated</h2>
+                        </div>
+                        <div class="success-details">
+                            <p id="update-success-message" class="success-detail-line"></p>
+                        </div>
+                        <div class="success-actions">
+                            <a id="update-open-in-plex-btn" class="btn btn-plex" href="#" target="_blank" rel="noopener">Open in Plex <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/><path d="m21 3-9 9"/><path d="M15 3h6v6"/></svg></a>
+                            <button id="update-new-playlist-btn" class="btn btn-primary">New Playlist</button>
                         </div>
                     </div>
                 </div>
@@ -421,6 +525,9 @@
                 <span class="footer-separator">·</span>
                 <span id="footer-model" class="footer-model">--</span>
             </div>
+            <button id="regenerate-btn" class="btn-link regenerate-link footer-results-only">
+                &#8635; Regenerate Playlist
+            </button>
             <div class="footer-right">
                 <span id="footer-library-status" class="footer-library-status hidden">
                     <span id="footer-track-count">--</span>
@@ -429,6 +536,7 @@
                     <span class="footer-separator">·</span>
                     <a href="#" id="footer-refresh-link" class="footer-refresh">Refresh</a>
                 </span>
+                <span class="cost-display footer-results-only" id="cost-display"></span>
             </div>
         </footer>
     </div>

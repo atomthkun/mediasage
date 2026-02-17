@@ -28,7 +28,13 @@ from backend.models import (
     LibraryStatsResponse,
     GenreCount,
     DecadeCount,
+    PlexClientInfo,
+    PlexPlaylistInfo,
+    PlayQueueRequest,
+    PlayQueueResponse,
     SavePlaylistRequest,
+    UpdatePlaylistRequest,
+    UpdatePlaylistResponse,
     SavePlaylistResponse,
     SyncProgress,
     SyncTriggerResponse,
@@ -125,10 +131,11 @@ async def get_configuration() -> ConfigResponse:
     analysis_model = config.llm.model_analysis
     max_tracks = get_max_tracks_for_model(generation_model, config=config.llm)
 
-    # Get cost rates for generation model (for client-side cost calculation)
+    # Get cost rates for both models (for client-side cost calculation)
     # Local providers have zero cost
     is_local = config.llm.provider in ("ollama", "custom")
-    costs = get_model_cost(generation_model, config.llm)
+    gen_costs = get_model_cost(generation_model, config.llm)
+    analysis_costs = get_model_cost(analysis_model, config.llm)
 
     # LLM is configured if we have an API key OR if using a local provider with URL
     llm_configured = bool(config.llm.api_key)
@@ -152,8 +159,10 @@ async def get_configuration() -> ConfigResponse:
         model_analysis=analysis_model,
         model_generation=generation_model,
         max_tracks_to_ai=max_tracks,
-        cost_per_million_input=costs["input"],
-        cost_per_million_output=costs["output"],
+        cost_per_million_input=gen_costs["input"],
+        cost_per_million_output=gen_costs["output"],
+        analysis_cost_per_million_input=analysis_costs["input"],
+        analysis_cost_per_million_output=analysis_costs["output"],
         defaults=config.defaults,
         ollama_url=config.llm.ollama_url,
         ollama_context_window=config.llm.ollama_context_window,
@@ -201,10 +210,11 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
     analysis_model = config.llm.model_analysis
     max_tracks = get_max_tracks_for_model(generation_model, config=config.llm)
 
-    # Get cost rates for generation model (for client-side cost calculation)
+    # Get cost rates for both models (for client-side cost calculation)
     # Local providers have zero cost
     is_local = config.llm.provider in ("ollama", "custom")
-    costs = get_model_cost(generation_model, config.llm)
+    gen_costs = get_model_cost(generation_model, config.llm)
+    analysis_costs = get_model_cost(analysis_model, config.llm)
 
     # LLM is configured if we have an API key OR if using a local provider with URL
     llm_configured = bool(config.llm.api_key)
@@ -228,8 +238,10 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
         model_analysis=analysis_model,
         model_generation=generation_model,
         max_tracks_to_ai=max_tracks,
-        cost_per_million_input=costs["input"],
-        cost_per_million_output=costs["output"],
+        cost_per_million_input=gen_costs["input"],
+        cost_per_million_output=gen_costs["output"],
+        analysis_cost_per_million_input=analysis_costs["input"],
+        analysis_cost_per_million_output=analysis_costs["output"],
         defaults=config.defaults,
         ollama_url=config.llm.ollama_url,
         ollama_context_window=config.llm.ollama_context_window,
@@ -607,6 +619,74 @@ async def save_playlist(request: SavePlaylistRequest) -> SavePlaylistResponse:
         request.description,
     )
     return SavePlaylistResponse(**result)
+
+
+# =============================================================================
+# Instant Queue Endpoints
+# =============================================================================
+
+
+@app.get("/api/plex/clients", response_model=list[PlexClientInfo])
+async def get_plex_clients() -> list[PlexClientInfo]:
+    """List online Plex clients capable of playback."""
+    plex_client = get_plex_client()
+    if not plex_client or not plex_client.is_connected():
+        raise HTTPException(status_code=503, detail="Plex not connected")
+
+    return await asyncio.to_thread(plex_client.get_clients)
+
+
+@app.post("/api/play-queue", response_model=PlayQueueResponse)
+async def create_play_queue(request: PlayQueueRequest) -> PlayQueueResponse:
+    """Create a play queue and start playback on a Plex client."""
+    plex_client = get_plex_client()
+    if not plex_client or not plex_client.is_connected():
+        raise HTTPException(status_code=503, detail="Plex not connected")
+
+    result = await asyncio.to_thread(
+        plex_client.play_queue,
+        request.rating_keys,
+        request.client_id,
+        request.mode,
+    )
+
+    if not result["success"]:
+        if result.get("error_code") == "not_found":
+            raise HTTPException(status_code=404, detail=result["error"])
+        raise HTTPException(status_code=500, detail=result.get("error", "Play queue creation failed"))
+
+    return PlayQueueResponse(**result)
+
+
+@app.get("/api/plex/playlists", response_model=list[PlexPlaylistInfo])
+async def get_plex_playlists() -> list[PlexPlaylistInfo]:
+    """List audio playlists on the Plex server."""
+    plex_client = get_plex_client()
+    if not plex_client or not plex_client.is_connected():
+        raise HTTPException(status_code=503, detail="Plex not connected")
+
+    return await asyncio.to_thread(plex_client.get_playlists)
+
+
+@app.post("/api/playlist/update", response_model=UpdatePlaylistResponse)
+async def update_playlist(request: UpdatePlaylistRequest) -> UpdatePlaylistResponse:
+    """Update an existing Plex playlist by replacing or appending tracks."""
+    plex_client = get_plex_client()
+    if not plex_client or not plex_client.is_connected():
+        raise HTTPException(status_code=503, detail="Plex not connected")
+
+    result = await asyncio.to_thread(
+        plex_client.update_playlist,
+        request.playlist_id,
+        request.rating_keys,
+        request.mode,
+        request.description,
+    )
+
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Playlist update failed"))
+
+    return UpdatePlaylistResponse(**result)
 
 
 # =============================================================================

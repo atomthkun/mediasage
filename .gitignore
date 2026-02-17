@@ -46,11 +46,13 @@ htmlcov/
 
 # Development tools
 .claude/
+.playwright-cli/
 .specify/
 specs/
 initial-spec.md
 CLAUDE.md
 CODE_REVIEW.md
+docs/plans/
 
 # OS
 .DS_Store
