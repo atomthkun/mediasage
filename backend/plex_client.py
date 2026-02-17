@@ -724,6 +724,12 @@ class PlexClient:
             logger.exception("Failed to create playlist '%s'", name)
             return {"success": False, "error": str(e)}
 
+    @staticmethod
+    def _is_mobile_client(product: str, platform: str) -> bool:
+        """Check if a client is a mobile device based on product/platform strings."""
+        combined = f"{product} {platform}".lower()
+        return any(kw in combined for kw in ("ios", "android", "iphone", "ipad"))
+
     def get_clients(self) -> list[PlexClientInfo]:
         """Get online Plex clients capable of playback.
 
@@ -769,6 +775,7 @@ class PlexClient:
                 product=client.product,
                 platform=client.platform,
                 is_playing=is_playing,
+                is_mobile=self._is_mobile_client(client.product, client.platform),
             ))
 
         local_count = len(result)
@@ -800,12 +807,15 @@ class PlexClient:
                     continue
 
                 seen_ids.add(client_id)
+                product = getattr(resource, "product", "Unknown")
+                platform = getattr(resource, "platform", "Unknown") or getattr(resource, "platformVersion", "Unknown")
                 result.append(PlexClientInfo(
                     client_id=client_id,
                     name=resource.name,
-                    product=getattr(resource, "product", "Unknown"),
-                    platform=getattr(resource, "platform", "Unknown") or getattr(resource, "platformVersion", "Unknown"),
+                    product=product,
+                    platform=platform,
                     is_playing=client_id in playing_ids,
+                    is_mobile=self._is_mobile_client(product, platform),
                 ))
         except Exception as e:
             logger.warning("Failed to query account resources for players: %s", e)
@@ -1041,7 +1051,7 @@ class PlexClient:
         if not target_client:
             return {
                 "success": False,
-                "error": "Client not found or offline. Re-open the client picker to refresh.",
+                "error": "Device couldn't be reached. Try starting playback on the device first, then re-open the picker.",
                 "error_code": "not_found",
             }
 

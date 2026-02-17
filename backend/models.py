@@ -306,6 +306,7 @@ class PlexClientInfo(BaseModel):
     product: str
     platform: str
     is_playing: bool
+    is_mobile: bool = False
 
 
 class UpdatePlaylistRequest(BaseModel):
