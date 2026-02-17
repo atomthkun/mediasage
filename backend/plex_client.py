@@ -8,11 +8,12 @@ import time
 from typing import Any
 
 from plexapi.exceptions import NotFound, Unauthorized
+from plexapi.playqueue import PlayQueue
 from plexapi.server import PlexServer
 from requests.exceptions import ConnectionError, Timeout
 from unidecode import unidecode
 
-from backend.models import Track
+from backend.models import PlexClientInfo, PlexPlaylistInfo, Track
 
 logger = logging.getLogger(__name__)
 
@@ -709,14 +710,7 @@ class PlexClient:
                 except Exception as e:
                     logger.warning("Failed to set playlist description: %s", e)
 
-            # Build the Plex web app URL for the playlist (uses local server URL)
-            playlist_url = None
-            machine_id = self.get_machine_identifier()
-            if machine_id:
-                playlist_url = (
-                    f"{self.url}/web/index.html#!/server/{machine_id}"
-                    f"/playlist?key=%2Fplaylists%2F{playlist.ratingKey}"
-                )
+            playlist_url = self._build_playlist_url(playlist.ratingKey)
 
             return {
                 "success": True,
@@ -727,6 +721,388 @@ class PlexClient:
             }
         except Exception as e:
             logger.exception("Failed to create playlist '%s'", name)
+            return {"success": False, "error": str(e)}
+
+    def get_clients(self) -> list[PlexClientInfo]:
+        """Get online Plex clients capable of playback.
+
+        Discovers clients via two methods:
+        1. server.clients() — local GDM-discovered clients
+        2. myPlexAccount().resources() — cloud-connected players (Plexamp, etc.)
+
+        Returns:
+            List of PlexClientInfo for clients with playback capability.
+            Unresponsive clients are silently excluded.
+        """
+        if not self._server:
+            return []
+
+        result = []
+        seen_ids: set[str] = set()
+
+        # Method 1: Local GDM discovery
+        try:
+            local_clients = self._server.clients()
+        except Exception as e:
+            logger.warning("Failed to get local Plex clients: %s", e)
+            local_clients = []
+
+        for client in local_clients:
+            capabilities = getattr(client, "protocolCapabilities", None) or []
+            if isinstance(capabilities, str):
+                capabilities = [c.strip() for c in capabilities.split(",")]
+            if "playback" not in capabilities:
+                continue
+
+            try:
+                is_playing = client.isPlayingMedia(includePaused=True)
+            except Exception:
+                logger.warning("Client '%s' unresponsive, skipping", getattr(client, "title", "unknown"))
+                continue
+
+            mid = client.machineIdentifier
+            seen_ids.add(mid)
+            result.append(PlexClientInfo(
+                client_id=mid,
+                name=client.title,
+                product=client.product,
+                platform=client.platform,
+                is_playing=is_playing,
+            ))
+
+        # Method 2: Cloud-connected players via account resources
+        try:
+            account = self._server.myPlexAccount()
+            resources = account.resources()
+            for resource in resources:
+                provides = getattr(resource, "provides", "") or ""
+                if "player" not in provides:
+                    continue
+                # Skip if already found via local discovery
+                client_id = resource.clientIdentifier
+                if client_id in seen_ids:
+                    continue
+                # Only include online resources
+                if not getattr(resource, "presence", False):
+                    continue
+
+                # Determine playback state from sessions
+                is_playing = False
+                try:
+                    for session in self._server.sessions():
+                        if session.player and session.player.machineIdentifier == client_id:
+                            is_playing = True
+                            break
+                except Exception:
+                    pass
+
+                seen_ids.add(client_id)
+                result.append(PlexClientInfo(
+                    client_id=client_id,
+                    name=resource.name,
+                    product=getattr(resource, "product", "Unknown"),
+                    platform=getattr(resource, "platform", "Unknown") or getattr(resource, "platformVersion", "Unknown"),
+                    is_playing=is_playing,
+                ))
+        except Exception as e:
+            logger.warning("Failed to query account resources for players: %s", e)
+
+        return result
+
+    def get_playlists(self) -> list[PlexPlaylistInfo]:
+        """Get audio playlists from the Plex server.
+
+        Returns:
+            List of PlexPlaylistInfo sorted alphabetically by title.
+        """
+        if not self._server:
+            return []
+
+        try:
+            playlists = self._server.playlists(playlistType="audio")
+            result = [
+                PlexPlaylistInfo(
+                    rating_key=str(playlist.ratingKey),
+                    title=playlist.title,
+                    track_count=playlist.leafCount,
+                )
+                for playlist in playlists
+            ]
+            return sorted(result, key=lambda p: p.title.lower())
+        except Exception as e:
+            logger.exception("Failed to get playlists: %s", e)
+            return []
+
+    def update_playlist(
+        self,
+        playlist_id: str,
+        rating_keys: list[str],
+        mode: str = "replace",
+        description: str = "",
+    ) -> dict[str, Any]:
+        """Update an existing Plex playlist by replacing or appending tracks.
+
+        Handles the __scratch__ sentinel for auto-creating "MediaSage - Now Playing".
+
+        Args:
+            playlist_id: Rating key of target playlist, or "__scratch__" sentinel
+            rating_keys: List of track rating keys to add
+            mode: 'replace' or 'append'
+            description: Optional playlist description/summary
+
+        Returns:
+            Dict with success, tracks_added, tracks_skipped, duplicates_skipped,
+            playlist_url, error
+        """
+        if not self._server:
+            return {"success": False, "error": "Not connected to Plex"}
+
+        try:
+            # Handle __scratch__ sentinel — find or create "MediaSage - Now Playing"
+            if playlist_id == "__scratch__":
+                scratch_playlist = None
+                try:
+                    for p in self._server.playlists(playlistType="audio"):
+                        if p.title == "MediaSage - Now Playing":
+                            scratch_playlist = p
+                            break
+                except Exception as e:
+                    logger.warning("Failed to search for scratch playlist: %s", e)
+
+                if scratch_playlist is None:
+                    # Create new scratch playlist with the provided tracks
+                    items = []
+                    tracks_skipped = 0
+                    for key in rating_keys:
+                        try:
+                            items.append(self._server.fetchItem(int(key)))
+                        except Exception:
+                            tracks_skipped += 1
+
+                    if not items:
+                        return {"success": False, "error": "No valid tracks found"}
+
+                    playlist = self._server.createPlaylist(
+                        "MediaSage - Now Playing", items=items
+                    )
+
+                    if description:
+                        try:
+                            playlist.edit(summary=description)
+                        except Exception as e:
+                            logger.warning("Failed to set playlist description: %s", e)
+
+                    playlist_url = self._build_playlist_url(playlist.ratingKey)
+                    return {
+                        "success": True,
+                        "tracks_added": len(items),
+                        "tracks_skipped": tracks_skipped,
+                        "duplicates_skipped": 0,
+                        "playlist_url": playlist_url,
+                    }
+                else:
+                    # Use the existing scratch playlist
+                    playlist_id = str(scratch_playlist.ratingKey)
+
+            # Fetch the target playlist
+            playlist = self._server.fetchItem(int(playlist_id))
+
+            # Fetch new track objects
+            items = []
+            tracks_skipped = 0
+            duplicates_skipped = 0
+
+            if mode == "replace":
+                # Fetch new items FIRST to avoid data loss if add fails
+                for key in rating_keys:
+                    try:
+                        items.append(self._server.fetchItem(int(key)))
+                    except Exception:
+                        tracks_skipped += 1
+
+                if not items:
+                    return {
+                        "success": False,
+                        "error": "No valid tracks found to replace with",
+                        "tracks_added": 0,
+                        "tracks_skipped": tracks_skipped,
+                        "duplicates_skipped": 0,
+                    }
+
+                # Add new items FIRST, then remove old ones.
+                # This avoids data loss: if addItems fails, old tracks remain.
+                # If removeItems fails, user has duplicates (recoverable) not emptiness.
+                existing_items = playlist.items()
+                playlist.addItems(items)
+                warning = None
+                if existing_items:
+                    try:
+                        playlist.removeItems(existing_items)
+                    except Exception as e:
+                        logger.warning("Failed to remove old items during replace: %s", e)
+                        warning = "Replaced tracks were added but old tracks could not be removed. Playlist may contain duplicates."
+
+            elif mode == "append":
+                warning = None
+                # Build set of existing rating keys for deduplication
+                existing_keys = {
+                    str(item.ratingKey) for item in playlist.items()
+                }
+
+                for key in rating_keys:
+                    if key in existing_keys:
+                        duplicates_skipped += 1
+                        continue
+                    try:
+                        items.append(self._server.fetchItem(int(key)))
+                    except Exception:
+                        tracks_skipped += 1
+
+                if items:
+                    playlist.addItems(items)
+
+            else:
+                return {"success": False, "error": f"Unknown update mode: {mode}"}
+
+            # Update description if provided
+            if description:
+                try:
+                    playlist.edit(summary=description)
+                except Exception as e:
+                    logger.warning("Failed to set playlist description: %s", e)
+
+            playlist_url = self._build_playlist_url(playlist.ratingKey)
+            result = {
+                "success": True,
+                "tracks_added": len(items),
+                "tracks_skipped": tracks_skipped,
+                "duplicates_skipped": duplicates_skipped,
+                "playlist_url": playlist_url,
+            }
+            if warning:
+                result["warning"] = warning
+            return result
+        except Exception as e:
+            logger.exception("Failed to update playlist '%s'", playlist_id)
+            return {"success": False, "error": str(e)}
+
+    def _build_playlist_url(self, rating_key: int) -> str | None:
+        """Build the Plex web app URL for a playlist."""
+        machine_id = self.get_machine_identifier()
+        if not machine_id:
+            return None
+        return (
+            f"{self.url}/web/index.html#!/server/{machine_id}"
+            f"/playlist?key=%2Fplaylists%2F{rating_key}"
+        )
+
+    def play_queue(
+        self, rating_keys: list[str], client_id: str, mode: str = "replace"
+    ) -> dict[str, Any]:
+        """Create a play queue and start playback on a Plex client.
+
+        Args:
+            rating_keys: List of track rating keys
+            client_id: machineIdentifier of target client
+            mode: 'replace' (new queue) or 'play_next' (add after current)
+
+        Returns:
+            Dict with success, client_name, client_product, tracks_queued, error
+        """
+        if not self._server:
+            return {"success": False, "error": "Not connected to Plex"}
+
+        # Find the target client — try local GDM first, then cloud resources
+        target_client = None
+        try:
+            for c in self._server.clients():
+                if c.machineIdentifier == client_id:
+                    target_client = c
+                    break
+        except Exception:
+            pass
+
+        # Fall back to cloud-connected resource
+        if not target_client:
+            try:
+                account = self._server.myPlexAccount()
+                for resource in account.resources():
+                    if resource.clientIdentifier == client_id:
+                        target_client = resource.connect()
+                        break
+            except Exception as e:
+                logger.warning("Failed to connect to cloud client %s: %s", client_id, e)
+
+        if not target_client:
+            return {
+                "success": False,
+                "error": "Client not found or offline. Re-open the client picker to refresh.",
+                "error_code": "not_found",
+            }
+
+        # Proxy through server for reliable communication
+        try:
+            target_client.proxyThroughServer(value=True)
+        except Exception:
+            pass  # Best effort — some clients don't support this
+
+        # Fetch track objects
+        tracks = []
+        for key in rating_keys:
+            try:
+                item = self._server.fetchItem(int(key))
+                tracks.append(item)
+            except Exception as e:
+                logger.warning("Failed to fetch track %s for play queue: %s", key, e)
+
+        if not tracks:
+            return {"success": False, "error": "No valid tracks found"}
+
+        try:
+            if mode == "replace":
+                play_queue = PlayQueue.create(
+                    self._server,
+                    items=tracks,
+                    startItem=tracks[0],
+                    includeRelated=0,
+                )
+                target_client.playMedia(play_queue)
+            elif mode == "play_next":
+                # Get current play queue from client timeline entries
+                # timelines() returns a list; timeline is a single object/None
+                play_queue_id = None
+                for entry in target_client.timelines():
+                    if entry.type == "music" and getattr(entry, "playQueueID", None):
+                        play_queue_id = entry.playQueueID
+                        break
+                if not play_queue_id:
+                    return {
+                        "success": False,
+                        "error": "No active play queue on this client",
+                    }
+                existing_queue = PlayQueue.get(
+                    self._server, play_queue_id, own=True
+                )
+                # Add in reverse order so tracks play in intended order
+                for track in reversed(tracks):
+                    existing_queue.addItem(track, playNext=True, refresh=True)
+
+            else:
+                return {"success": False, "error": f"Unknown play queue mode: {mode}"}
+
+            return {
+                "success": True,
+                "client_name": target_client.title,
+                "client_product": target_client.product,
+                "tracks_queued": len(tracks),
+            }
+        except ConnectionError:
+            return {
+                "success": False,
+                "error": f"Client '{target_client.title}' went offline during playback",
+            }
+        except Exception as e:
+            logger.exception("Failed to create play queue on '%s'", target_client.title)
             return {"success": False, "error": str(e)}
 
     def _convert_track(self, plex_track: Any) -> Track:

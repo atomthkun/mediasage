@@ -49,8 +49,8 @@ class FilterSet(BaseModel):
     @field_validator("track_count")
     @classmethod
     def validate_track_count(cls, v: int) -> int:
-        if v not in [15, 25, 40]:
-            raise ValueError("track_count must be 15, 25, or 40")
+        if v not in [15, 25, 50, 100]:
+            raise ValueError("track_count must be 15, 25, 50, or 100")
         return v
 
 
@@ -277,6 +277,89 @@ class SavePlaylistResponse(BaseModel):
     tracks_skipped: int | None = None
 
 
+# =============================================================================
+# Instant Queue Models (005)
+# =============================================================================
+
+
+class PlexPlaylistInfo(BaseModel):
+    """Lightweight playlist info for the picker."""
+
+    rating_key: str
+    title: str
+    track_count: int
+
+
+class PlexClientInfo(BaseModel):
+    """Online Plex client info."""
+
+    client_id: str
+    name: str
+    product: str
+    platform: str
+    is_playing: bool
+
+
+class UpdatePlaylistRequest(BaseModel):
+    """Request to update an existing playlist."""
+
+    playlist_id: str
+    rating_keys: list[str]
+    mode: Literal["replace", "append"]
+    description: str = ""
+
+    @field_validator("playlist_id")
+    @classmethod
+    def validate_playlist_id(cls, v: str) -> str:
+        if v != "__scratch__" and not v.isdigit():
+            raise ValueError("playlist_id must be '__scratch__' or a numeric rating key")
+        return v
+
+    @field_validator("rating_keys")
+    @classmethod
+    def validate_rating_keys(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("At least one track is required")
+        return v
+
+
+class UpdatePlaylistResponse(BaseModel):
+    """Response from updating a playlist."""
+
+    success: bool
+    tracks_added: int = 0
+    tracks_skipped: int = 0
+    duplicates_skipped: int = 0
+    playlist_url: str | None = None
+    warning: str | None = None
+    error: str | None = None
+
+
+class PlayQueueRequest(BaseModel):
+    """Request to create a play queue."""
+
+    rating_keys: list[str]
+    client_id: str
+    mode: Literal["replace", "play_next"] = "replace"
+
+    @field_validator("rating_keys")
+    @classmethod
+    def validate_rating_keys(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("At least one track is required")
+        return v
+
+
+class PlayQueueResponse(BaseModel):
+    """Response from play queue creation."""
+
+    success: bool
+    client_name: str | None = None
+    client_product: str | None = None
+    tracks_queued: int = 0
+    error: str | None = None
+
+
 class ConfigResponse(BaseModel):
     """Config without secrets for display."""
 
@@ -293,6 +376,8 @@ class ConfigResponse(BaseModel):
     max_tracks_to_ai: int  # Recommended max tracks for this model
     cost_per_million_input: float  # Cost per million input tokens for generation model
     cost_per_million_output: float  # Cost per million output tokens for generation model
+    analysis_cost_per_million_input: float = 0.0  # Cost per million input tokens for analysis model
+    analysis_cost_per_million_output: float = 0.0  # Cost per million output tokens for analysis model
     defaults: DefaultsConfig
     # Local provider fields
     ollama_url: str = "http://localhost:11434"
