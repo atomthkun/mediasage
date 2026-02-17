@@ -2064,6 +2064,10 @@ input[type="number"]:focus:not(:focus-visible) {
     background: var(--success);
 }
 
+.client-hint-dot.mobile {
+    background: var(--warning);
+}
+
 .client-status-text {
     font-size: 0.75rem;
     margin-top: 2px;

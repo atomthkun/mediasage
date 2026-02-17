@@ -36,13 +36,19 @@ const focusManager = {
             }
         };
         document.addEventListener('keydown', trapHandler);
-        this._stack.push({ previousFocus, trapHandler });
+        this._stack.push({ modalEl, previousFocus, trapHandler });
     },
 
-    /** Close a modal: remove trap, restore previous focus */
-    closeModal() {
-        const entry = this._stack.pop();
-        if (!entry) return;
+    /** Close a modal: remove trap, restore previous focus.
+     *  Accepts an optional modalEl to find the matching entry (safe for non-LIFO order).
+     *  Falls back to popping the top entry when called without arguments. */
+    closeModal(modalEl) {
+        let idx = this._stack.length - 1;
+        if (modalEl) {
+            idx = this._stack.findLastIndex(e => e.modalEl === modalEl);
+        }
+        if (idx < 0) return;
+        const [entry] = this._stack.splice(idx, 1);
         document.removeEventListener('keydown', entry.trapHandler);
         if (entry.previousFocus && typeof entry.previousFocus.focus === 'function') {
             entry.previousFocus.focus();
@@ -609,6 +615,7 @@ function viewFromHash() {
 }
 
 function navigateTo(view) {
+    if (state.view === view) return;
     state.view = view;
     updateView();
     if (view === 'settings') {
@@ -621,7 +628,7 @@ function updateView() {
     document.querySelectorAll('.nav-btn').forEach(btn => {
         const isActive = btn.dataset.view === state.view;
         btn.classList.toggle('active', isActive);
-        btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        btn.setAttribute('aria-current', isActive ? 'true' : 'false');
     });
 
     // Update views
@@ -635,7 +642,7 @@ function updateMode() {
     document.querySelectorAll('.mode-tab').forEach(tab => {
         const isActive = tab.dataset.mode === state.mode;
         tab.classList.toggle('active', isActive);
-        tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
     });
 
     // Update step panels visibility
@@ -1133,7 +1140,7 @@ function closeBottomSheet() {
 
     sheet.classList.add('hidden');
     removeNoScrollIfNoModals();
-    focusManager.closeModal();
+    focusManager.closeModal(sheet);
 }
 
 function updatePlaylist() {
@@ -1699,9 +1706,10 @@ function showSuccessModal(name, trackCount, playlistUrl) {
 
 function dismissSuccessModal() {
     // Just hide the modal, don't reset state - user can continue with playlist
-    document.getElementById('success-modal').classList.add('hidden');
+    const modal = document.getElementById('success-modal');
+    modal.classList.add('hidden');
     removeNoScrollIfNoModals();
-    focusManager.closeModal();
+    focusManager.closeModal(modal);
 }
 
 function resetPlaylistState() {
@@ -1729,9 +1737,10 @@ function resetPlaylistState() {
 }
 
 function hideSuccessModal() {
-    document.getElementById('success-modal').classList.add('hidden');
+    const modal = document.getElementById('success-modal');
+    modal.classList.add('hidden');
     removeNoScrollIfNoModals();
-    focusManager.closeModal();
+    focusManager.closeModal(modal);
     resetPlaylistState();
 }
 
@@ -1752,7 +1761,7 @@ function hideSyncModal() {
     const modal = document.getElementById('sync-modal');
     modal.classList.add('hidden');
     removeNoScrollIfNoModals();
-    focusManager.closeModal();
+    focusManager.closeModal(modal);
 }
 
 function updateSyncProgress(phase, current, total) {
@@ -1949,7 +1958,8 @@ function setupEventListeners() {
     // Navigation
     document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            location.hash = '#' + VIEW_TO_HASH[btn.dataset.view];
+            const hash = VIEW_TO_HASH[btn.dataset.view];
+            if (hash) location.hash = '#' + hash;
         });
     });
 
@@ -1958,7 +1968,8 @@ function setupEventListeners() {
         const link = e.target.closest('.llm-required-hint a[data-view]');
         if (link) {
             e.preventDefault();
-            location.hash = '#' + VIEW_TO_HASH[link.dataset.view];
+            const hash = VIEW_TO_HASH[link.dataset.view];
+            if (hash) location.hash = '#' + hash;
         }
     });
 
@@ -2691,7 +2702,7 @@ function unlockScroll() {
 
 function removeNoScrollIfNoModals() {
     const openModal = document.querySelector(
-        '.modal-overlay:not(.hidden), .success-modal:not(.hidden), .sync-modal:not(.hidden), .bottom-sheet:not(.hidden)'
+        '.modal-overlay:not(.hidden), .success-modal:not(.hidden), .sync-modal:not(.hidden), .bottom-sheet:not(.hidden), .loading-overlay:not(.hidden)'
     );
     if (!openModal) {
         unlockScroll();
@@ -2699,28 +2710,32 @@ function removeNoScrollIfNoModals() {
 }
 
 function dismissClientPicker() {
-    document.getElementById('client-picker-modal').classList.add('hidden');
+    const modal = document.getElementById('client-picker-modal');
+    modal.classList.add('hidden');
     removeNoScrollIfNoModals();
-    focusManager.closeModal();
+    focusManager.closeModal(modal);
 }
 
 function dismissPlayChoice() {
-    document.getElementById('play-choice-modal').classList.add('hidden');
+    const modal = document.getElementById('play-choice-modal');
+    modal.classList.add('hidden');
     removeNoScrollIfNoModals();
-    focusManager.closeModal();
+    focusManager.closeModal(modal);
     state._pendingClientId = null;
 }
 
 function dismissPlaySuccess() {
-    document.getElementById('play-success-modal').classList.add('hidden');
+    const modal = document.getElementById('play-success-modal');
+    modal.classList.add('hidden');
     removeNoScrollIfNoModals();
-    focusManager.closeModal();
+    focusManager.closeModal(modal);
 }
 
 function dismissUpdateSuccess() {
-    document.getElementById('update-success-modal').classList.add('hidden');
+    const modal = document.getElementById('update-success-modal');
+    modal.classList.add('hidden');
     removeNoScrollIfNoModals();
-    focusManager.closeModal();
+    focusManager.closeModal(modal);
 }
 
 function getClientStatusText(client) {
@@ -2853,7 +2868,7 @@ async function executePlayQueue(clientId, mode) {
             focusManager.openModal(playSuccessModal);
         } else {
             let errorMsg = response.error || 'Failed to start playback';
-            if (/not found|offline|couldn't be reached/i.test(errorMsg)) {
+            if (response.error_code === 'not_found') {
                 errorMsg = "Device couldn't be reached. Try starting playback on the device first, then re-open the picker.";
             }
             showError(errorMsg);
@@ -3066,16 +3081,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     };
     ensureTabIndex(document);
-    new MutationObserver((mutations) => {
-        for (const m of mutations) {
-            for (const node of m.addedNodes) {
-                if (node.nodeType === 1) ensureTabIndex(node);
-            }
+    let tabIndexPending = false;
+    new MutationObserver(() => {
+        if (!tabIndexPending) {
+            tabIndexPending = true;
+            requestAnimationFrame(() => {
+                ensureTabIndex(document.body);
+                tabIndexPending = false;
+            });
         }
     }).observe(document.body, { childList: true, subtree: true });
 
     setupEventListeners();
     state.view = viewFromHash();
+    if (!location.hash) {
+        history.replaceState(null, '', '#' + VIEW_TO_HASH[state.view]);
+    }
     updateView();
     updateMode();
     updateStep();
@@ -3114,3 +3135,4 @@ window.dismissClientPicker = dismissClientPicker;
 window.dismissPlayChoice = dismissPlayChoice;
 window.dismissPlaySuccess = dismissPlaySuccess;
 window.dismissUpdateSuccess = dismissUpdateSuccess;
+window.closeBottomSheet = closeBottomSheet;

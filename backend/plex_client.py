@@ -724,11 +724,13 @@ class PlexClient:
             logger.exception("Failed to create playlist '%s'", name)
             return {"success": False, "error": str(e)}
 
-    @staticmethod
-    def _is_mobile_client(product: str, platform: str) -> bool:
-        """Check if a client is a mobile device based on product/platform strings."""
-        combined = f"{product} {platform}".lower()
-        return any(kw in combined for kw in ("ios", "android", "iphone", "ipad"))
+    _MOBILE_KEYWORDS = {"ios", "android", "iphone", "ipad", "ipod", "tvos"}
+
+    @classmethod
+    def _is_mobile_client(cls, product: str, platform: str) -> bool:
+        """Check if a client is a mobile/TV device that needs an active session."""
+        tokens = set(re.split(r"[\s,/]+", f"{product} {platform}".lower()))
+        return bool(tokens & cls._MOBILE_KEYWORDS)
 
     def get_clients(self) -> list[PlexClientInfo]:
         """Get online Plex clients capable of playback.
