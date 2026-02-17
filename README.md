@@ -125,13 +125,16 @@ Bring your own API key—or run locally:
 
 Estimated cost displays before you generate. MediaSage auto-detects your provider based on which key you configure.
 
-### Review and Save
+### Play and Save
 
+- **Play Now** — send tracks directly to any Plex device for instant playback
+- **Create** a new playlist, **replace** an existing one, or **append** tracks to one
+- Device picker shows all active Plex clients with status indicators
+- Duplicate detection when appending to existing playlists
 - Preview tracks with album art before saving
 - Remove tracks you don't want
 - Rename the playlist
 - See actual token usage and cost
-- One-click save to Plex
 
 ---
 
@@ -465,9 +468,18 @@ Interactive documentation available at `/docs` when running.
 | `/api/library/stats` | GET | Library statistics |
 | `/api/library/status` | GET | Cache state, track count, sync progress |
 | `/api/library/sync` | POST | Trigger background library sync |
+| `/api/library/search` | GET | Search library tracks |
 | `/api/analyze/prompt` | POST | Analyze natural language prompt |
+| `/api/analyze/track` | POST | Analyze a seed track |
+| `/api/filter/preview` | POST | Preview filtered track list |
 | `/api/generate` | POST | Generate playlist |
+| `/api/generate/stream` | POST | Stream playlist generation (SSE) |
 | `/api/playlist` | POST | Save playlist to Plex |
+| `/api/playlist/update` | POST | Replace or append to a playlist |
+| `/api/plex/clients` | GET | List active Plex clients |
+| `/api/plex/playlists` | GET | List existing Plex playlists |
+| `/api/play-queue` | POST | Send tracks to a Plex client |
+| `/api/art/{rating_key}` | GET | Proxy album art from Plex |
 | `/api/ollama/status` | GET | Ollama connection status |
 | `/api/ollama/models` | GET | List available Ollama models |
 | `/api/ollama/model-info` | GET | Get model details (context window) |
