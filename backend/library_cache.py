@@ -76,11 +76,15 @@ def get_db_connection() -> sqlite3.Connection:
     return conn
 
 
-def init_schema(conn: sqlite3.Connection) -> None:
+def init_schema(conn: sqlite3.Connection) -> bool:
     """Initialize database schema if not exists.
 
     Args:
         conn: Database connection
+
+    Returns:
+        True if a schema migration was applied (existing tracks need re-sync),
+        False if schema was already up-to-date or freshly created.
     """
     conn.executescript("""
         -- Tracks table: cached Plex track metadata
@@ -94,6 +98,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             genres TEXT,
             user_rating INTEGER,
             is_live BOOLEAN,
+            parent_rating_key TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -114,7 +119,40 @@ def init_schema(conn: sqlite3.Connection) -> None:
         -- Ensure sync_state has exactly one row
         INSERT OR IGNORE INTO sync_state (id) VALUES (1);
     """)
+
+    # Migration: add parent_rating_key column if missing (for pre-existing databases)
+    migrated = False
+    try:
+        conn.execute("ALTER TABLE tracks ADD COLUMN parent_rating_key TEXT")
+        migrated = True
+        logger.info("Migration applied: added parent_rating_key column")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add view_count and last_viewed_at columns for familiarity tracking
+    try:
+        conn.execute("ALTER TABLE tracks ADD COLUMN view_count INTEGER DEFAULT 0")
+        migrated = True
+        logger.info("Migration applied: added view_count column")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    try:
+        conn.execute("ALTER TABLE tracks ADD COLUMN last_viewed_at TEXT")
+        migrated = True
+        logger.info("Migration applied: added last_viewed_at column")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Index on parent_rating_key (must come after migration adds the column)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_parent_key ON tracks(parent_rating_key)")
+
     conn.commit()
+    return migrated
+
+
+# Whether a migration was applied on startup (signals need for re-sync)
+_migration_applied = False
 
 
 def ensure_db_initialized() -> sqlite3.Connection:
@@ -123,12 +161,12 @@ def ensure_db_initialized() -> sqlite3.Connection:
     Returns:
         Initialized database connection
     """
-    global _schema_initialized
+    global _schema_initialized, _migration_applied
     conn = get_db_connection()
 
     # Only initialize schema once per process to avoid lock contention
     if not _schema_initialized:
-        init_schema(conn)
+        _migration_applied = init_schema(conn)
         _schema_initialized = True
 
     return conn
@@ -419,6 +457,11 @@ def sync_library(
             genres = album_data.get("genres", [])
             year = album_data.get("year")
 
+            # Extract play history data
+            view_count = getattr(track, "viewCount", 0) or 0
+            last_viewed_at_raw = getattr(track, "lastViewedAt", None)
+            last_viewed_at = last_viewed_at_raw.isoformat() if last_viewed_at_raw else None
+
             batch_data.append((
                 str(track.ratingKey),
                 title,
@@ -429,6 +472,9 @@ def sync_library(
                 json.dumps(genres),  # Store genres as JSON array
                 getattr(track, "userRating", None),
                 _is_live_version(title, album),
+                parent_key,
+                view_count,
+                last_viewed_at,
             ))
 
             # Insert and update progress every SYNC_BATCH_SIZE tracks
@@ -436,7 +482,8 @@ def sync_library(
                 conn.executemany(
                     "INSERT OR REPLACE INTO tracks "
                     "(rating_key, title, artist, album, duration_ms, year, genres, "
-                    "user_rating, is_live) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "user_rating, is_live, parent_rating_key, view_count, last_viewed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     batch_data,
                 )
                 synced_count += len(batch_data)
@@ -457,7 +504,8 @@ def sync_library(
             conn.executemany(
                 "INSERT OR REPLACE INTO tracks "
                 "(rating_key, title, artist, album, duration_ms, year, genres, "
-                "user_rating, is_live) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "user_rating, is_live, parent_rating_key, view_count, last_viewed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 batch_data,
             )
             synced_count += len(batch_data)
@@ -594,3 +642,213 @@ def has_cached_tracks() -> bool:
     """
     state = get_sync_state()
     return state["track_count"] > 0
+
+
+def needs_resync() -> bool:
+    """Check if a schema migration was applied that requires a re-sync.
+
+    Returns:
+        True if tracks exist but need re-sync to populate new columns.
+    """
+    return _migration_applied and has_cached_tracks()
+
+
+def get_album_candidates(
+    genres: list[str] | None = None,
+    decades: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Get album candidates aggregated from cached tracks.
+
+    Groups tracks by parent_rating_key to produce album-level data.
+    Supports genre/decade filtering.
+
+    Args:
+        genres: Optional genre filter (OR matching)
+        decades: Optional decade filter (OR matching, e.g. "1990s")
+
+    Returns:
+        List of album dicts with parent_rating_key, album, album_artist,
+        year, genres, decade, track_count, track_rating_keys.
+    """
+    conn = ensure_db_initialized()
+    try:
+        conditions = ["parent_rating_key IS NOT NULL", "parent_rating_key != ''"]
+        params: list[Any] = []
+
+        if decades:
+            decade_conditions = []
+            for decade in decades:
+                if decade.endswith("s"):
+                    start_year = int(decade[:-1])
+                else:
+                    start_year = int(decade)
+                end_year = start_year + 9
+                decade_conditions.append("(year >= ? AND year <= ?)")
+                params.extend([start_year, end_year])
+            if decade_conditions:
+                conditions.append(f"({' OR '.join(decade_conditions)})")
+
+        where_clause = " AND ".join(conditions)
+        query = (
+            f"SELECT rating_key, title, artist, album, year, genres, parent_rating_key "
+            f"FROM tracks WHERE {where_clause} "
+            f"ORDER BY parent_rating_key, rating_key"
+        )
+
+        rows = conn.execute(query, params).fetchall()
+
+        # Aggregate tracks into albums
+        albums: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            prk = row["parent_rating_key"]
+            track_genres = json.loads(row["genres"]) if row["genres"] else []
+
+            if prk not in albums:
+                # Derive decade from year
+                year = row["year"]
+                decade = ""
+                if year:
+                    decade_start = (year // 10) * 10
+                    decade = f"{decade_start}s"
+
+                albums[prk] = {
+                    "parent_rating_key": prk,
+                    "album": row["album"],
+                    "album_artist": row["artist"],
+                    "year": year,
+                    "genres": [],
+                    "decade": decade,
+                    "track_count": 0,
+                    "track_rating_keys": [],
+                    "_genre_set": set(),
+                }
+
+            album = albums[prk]
+            album["track_count"] += 1
+            album["track_rating_keys"].append(row["rating_key"])
+            for g in track_genres:
+                if g not in album["_genre_set"]:
+                    album["_genre_set"].add(g)
+                    album["genres"].append(g)
+
+        # Apply genre filter in Python (genres stored as JSON)
+        result = []
+        genres_lower = [g.lower() for g in genres] if genres else None
+        for album in albums.values():
+            # Remove internal tracking set
+            del album["_genre_set"]
+
+            if genres_lower:
+                album_genres_lower = [g.lower() for g in album["genres"]]
+                if not any(g in album_genres_lower for g in genres_lower):
+                    continue
+
+            result.append(album)
+
+        return result
+    finally:
+        conn.close()
+
+
+def get_cached_genre_decade_stats() -> dict[str, list[dict[str, Any]]]:
+    """Get genre and decade stats from the local cache.
+
+    Returns genre/decade lists derived from cached tracks, avoiding a
+    round-trip to the Plex server.
+
+    Returns:
+        Dict with 'genres' and 'decades' lists, each containing
+        {'name': str, 'count': int} dicts sorted by name.
+    """
+    conn = ensure_db_initialized()
+    try:
+        rows = conn.execute("SELECT genres, year FROM tracks").fetchall()
+
+        genre_counts: dict[str, int] = {}
+        decade_counts: dict[str, int] = {}
+
+        for row in rows:
+            # Tally genres
+            if row["genres"]:
+                for g in json.loads(row["genres"]):
+                    genre_counts[g] = genre_counts.get(g, 0) + 1
+
+            # Tally decades
+            year = row["year"]
+            if year:
+                decade_start = (year // 10) * 10
+                decade_name = f"{decade_start}s"
+                decade_counts[decade_name] = decade_counts.get(decade_name, 0) + 1
+
+        genres = sorted(
+            [{"name": name, "count": count} for name, count in genre_counts.items()],
+            key=lambda x: x["name"],
+        )
+        decades = sorted(
+            [{"name": name, "count": count} for name, count in decade_counts.items()],
+            key=lambda x: x["name"],
+        )
+
+        return {"genres": genres, "decades": decades}
+    finally:
+        conn.close()
+
+
+def get_album_familiarity(
+    parent_rating_keys: list[str] | None = None,
+) -> dict[str, dict]:
+    """Get familiarity data for albums aggregated from cached track play history.
+
+    Classifies each album as:
+    - "unplayed": 0 total plays across all tracks
+    - "well-loved": avg plays per track >= 3
+    - "light": some plays but avg < 3
+
+    Args:
+        parent_rating_keys: Optional list of album keys to query.
+            If None, returns all albums.
+
+    Returns:
+        Dict mapping parent_rating_key -> {"level": str, "last_viewed_at": str|None}
+    """
+    conn = ensure_db_initialized()
+    try:
+        query = (
+            "SELECT parent_rating_key, "
+            "SUM(view_count) AS total_plays, "
+            "AVG(view_count) AS avg_plays, "
+            "MAX(last_viewed_at) AS last_viewed "
+            "FROM tracks "
+            "WHERE parent_rating_key IS NOT NULL AND parent_rating_key != '' "
+        )
+        params: list[str] = []
+
+        if parent_rating_keys is not None:
+            placeholders = ",".join("?" for _ in parent_rating_keys)
+            query += f"AND parent_rating_key IN ({placeholders}) "
+            params.extend(parent_rating_keys)
+
+        query += "GROUP BY parent_rating_key"
+
+        rows = conn.execute(query, params).fetchall()
+
+        result: dict[str, dict] = {}
+        for row in rows:
+            total_plays = row["total_plays"] or 0
+            avg_plays = row["avg_plays"] or 0
+
+            if total_plays == 0:
+                level = "unplayed"
+            elif avg_plays >= 3:
+                level = "well-loved"
+            else:
+                level = "light"
+
+            result[row["parent_rating_key"]] = {
+                "level": level,
+                "last_viewed_at": row["last_viewed"],
+            }
+
+        return result
+    finally:
+        conn.close()
