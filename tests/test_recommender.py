@@ -1,5 +1,9 @@
 """Tests for the recommendation pipeline grounding improvements."""
 
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from backend.models import (
     ExtractedFacts,
     PitchIssue,
@@ -73,10 +77,6 @@ class TestGroundingModels:
         """ResearchData.review_texts should default to empty list."""
         rd = ResearchData()
         assert rd.review_texts == []
-
-
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestMusicResearchReviews:
@@ -407,7 +407,7 @@ class TestWritePitchesGrounding:
     def test_write_pitches_no_500_char_truncation(self):
         """write_pitches should NOT truncate Wikipedia to 500 chars (old behavior)."""
         from backend.recommender import RecommendationPipeline
-        from backend.models import AlbumRecommendation, ResearchData
+        from backend.models import AlbumRecommendation
 
         mock_llm = MagicMock()
         mock_response = MagicMock()

@@ -115,7 +115,7 @@ class RecommendationPipeline:
             creds = ", ".join(f"{role}: {name}" for role, name in research.credits.items())
             metadata_parts.append(f"Credits: {creds}")
         if metadata_parts:
-            sources.append(f"MUSICBRAINZ METADATA:\n" + "\n".join(metadata_parts))
+            sources.append("MUSICBRAINZ METADATA:\n" + "\n".join(metadata_parts))
 
         sources_text = "\n\n".join(sources) if sources else "No sources available."
 
