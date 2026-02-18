@@ -1,6 +1,7 @@
 """FastAPI application for MediaSage."""
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,6 +15,7 @@ import httpx
 from backend.config import get_config, update_config_values, ConfigSaveError
 from backend.version import get_version
 from backend.models import (
+    AlbumPreviewResponse,
     AnalyzePromptRequest,
     AnalyzePromptResponse,
     AnalyzeTrackRequest,
@@ -32,6 +34,10 @@ from backend.models import (
     PlexPlaylistInfo,
     PlayQueueRequest,
     PlayQueueResponse,
+    RecommendGenerateRequest,
+    RecommendGenerateResponse,
+    RecommendQuestionsRequest,
+    RecommendQuestionsResponse,
     SavePlaylistRequest,
     UpdatePlaylistRequest,
     UpdatePlaylistResponse,
@@ -57,6 +63,8 @@ from backend.models import OllamaModelsResponse, OllamaModelInfo, OllamaStatus
 from backend.analyzer import analyze_prompt as do_analyze_prompt, analyze_track as do_analyze_track
 from backend.generator import generate_playlist as do_generate_playlist, generate_playlist_stream
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -76,7 +84,22 @@ async def lifespan(app: FastAPI):
     if config.llm.api_key or config.llm.provider in ("ollama", "custom"):
         init_llm_client(config.llm)
 
+    # Initialize DB schema early so migration flag is set
+    library_cache.ensure_db_initialized().close()
+
+    # Auto-sync if a migration was applied and existing tracks need re-sync
+    plex_client = get_plex_client()
+    if library_cache.needs_resync() and plex_client and plex_client.is_connected():
+        logger.info("Schema migration detected — starting automatic library re-sync")
+        asyncio.create_task(
+            asyncio.to_thread(library_cache.sync_library, plex_client)
+        )
+
     yield
+
+    # Shutdown: clean up resources
+    if _music_research_client is not None:
+        await _music_research_client.close()
 
 
 app = FastAPI(
@@ -362,6 +385,17 @@ async def get_library_stats() -> LibraryStatsResponse:
         total_tracks=stats.get("total_tracks", 0),
         genres=[GenreCount(**g) for g in stats.get("genres", [])],
         decades=[DecadeCount(**d) for d in stats.get("decades", [])],
+    )
+
+
+@app.get("/api/library/stats/cached", response_model=LibraryStatsResponse)
+async def get_library_stats_cached() -> LibraryStatsResponse:
+    """Get genre/decade stats from the local cache (no Plex round-trip)."""
+    stats = await asyncio.to_thread(library_cache.get_cached_genre_decade_stats)
+    return LibraryStatsResponse(
+        total_tracks=0,  # Not needed for filter chips
+        genres=[GenreCount(**g) for g in stats["genres"]],
+        decades=[DecadeCount(**d) for d in stats["decades"]],
     )
 
 
@@ -687,6 +721,426 @@ async def update_playlist(request: UpdatePlaylistRequest) -> UpdatePlaylistRespo
         raise HTTPException(status_code=500, detail=result.get("error", "Playlist update failed"))
 
     return UpdatePlaylistResponse(**result)
+
+
+# =============================================================================
+# Recommendation Endpoints (006)
+# =============================================================================
+
+# Module-level pipeline instance (initialized lazily)
+_recommendation_pipeline = None
+_recommendation_pipeline_llm = None  # Track which LLM client the pipeline was built with
+_music_research_client = None
+
+
+def _get_pipeline():
+    """Get or create the recommendation pipeline. Recreates if LLM client changed."""
+    global _recommendation_pipeline, _recommendation_pipeline_llm
+    llm_client = get_llm_client()
+    if llm_client is None:
+        return None
+    config = get_config()
+    if _recommendation_pipeline is None or _recommendation_pipeline_llm is not llm_client:
+        from backend.recommender import RecommendationPipeline
+        _recommendation_pipeline = RecommendationPipeline(config, llm_client)
+        _recommendation_pipeline_llm = llm_client
+    return _recommendation_pipeline
+
+
+def _get_research_client():
+    """Get or create the music research client."""
+    global _music_research_client
+    if _music_research_client is None:
+        from backend.music_research import MusicResearchClient
+        _music_research_client = MusicResearchClient()
+    return _music_research_client
+
+
+@app.get("/api/recommend/albums/preview", response_model=AlbumPreviewResponse)
+async def recommend_albums_preview(
+    genres: str | None = Query(None, description="Comma-separated genre names"),
+    decades: str | None = Query(None, description="Comma-separated decade names"),
+) -> AlbumPreviewResponse:
+    """Preview filtered album counts and cost estimates for recommendation."""
+    from backend.llm_client import TOKENS_PER_ALBUM, estimate_cost_for_model
+
+    genre_list = [g.strip() for g in genres.split(",") if g.strip()] if genres else None
+    decade_list = [d.strip() for d in decades.split(",") if d.strip()] if decades else None
+
+    # Get album count from cache
+    if library_cache.has_cached_tracks():
+        candidates = await asyncio.to_thread(
+            library_cache.get_album_candidates,
+            genres=genre_list,
+            decades=decade_list,
+        )
+        matching_albums = len(candidates)
+    else:
+        matching_albums = 0
+
+    albums_to_send = matching_albums
+    config = get_config()
+
+    # Estimate tokens for 4 LLM calls using hardcoded empirical constants
+    # Gap analysis: ~800 input, ~50 output (analysis model)
+    # Question gen: ~600 input, ~200 output (generation model)
+    # Album selection: albums * TOKENS_PER_ALBUM + ~400 input, ~300 output (generation model)
+    # Pitch writing: ~1500 input, ~800 output (analysis model)
+    analysis_input = 800 + 1500  # gap_analysis + pitch_writing
+    analysis_output = 50 + 800
+    generation_input = 600 + (albums_to_send * TOKENS_PER_ALBUM) + 400  # question_gen + selection
+    generation_output = 200 + 300
+
+    estimated_input_tokens = analysis_input + generation_input
+
+    analysis_cost = estimate_cost_for_model(
+        config.llm.model_analysis, analysis_input, analysis_output, config=config.llm
+    )
+    generation_cost = estimate_cost_for_model(
+        config.llm.model_generation, generation_input, generation_output, config=config.llm
+    )
+    estimated_cost = analysis_cost + generation_cost
+
+    return AlbumPreviewResponse(
+        matching_albums=matching_albums,
+        albums_to_send=albums_to_send,
+        estimated_input_tokens=estimated_input_tokens,
+        estimated_cost=estimated_cost,
+    )
+
+
+@app.post("/api/recommend/questions", response_model=RecommendQuestionsResponse)
+async def recommend_questions(request: RecommendQuestionsRequest) -> RecommendQuestionsResponse:
+    """Generate clarifying questions for album recommendation."""
+    pipeline = _get_pipeline()
+    if not pipeline:
+        raise HTTPException(status_code=503, detail="LLM not configured")
+
+    # Get album candidates
+    genre_list = request.genres if request.genres else None
+    decade_list = request.decades if request.decades else None
+
+    # Always load candidates (needed for library mode and taste profile in discovery mode)
+    from backend.models import AlbumCandidate, RecommendSessionState
+    candidates = []
+    taste_profile = None
+
+    if not library_cache.has_cached_tracks():
+        if request.mode == "library":
+            raise HTTPException(status_code=400, detail="Library cache is empty. Please sync your library first.")
+        elif request.mode == "discovery":
+            raise HTTPException(status_code=400, detail="Library cache is empty. Discovery mode needs your library to build a taste profile. Please sync first.")
+    else:
+        candidates_raw = await asyncio.to_thread(
+            library_cache.get_album_candidates,
+            genres=genre_list if request.mode == "library" else None,
+            decades=decade_list if request.mode == "library" else None,
+        )
+
+        if request.mode == "library" and not candidates_raw:
+            # Check if tracks exist but lack parent_rating_key (needs re-sync)
+            if library_cache.has_cached_tracks():
+                sync_state = library_cache.get_sync_state()
+                if sync_state["is_syncing"]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Library sync in progress. Album recommendations will be available once it completes.",
+                    )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Your library needs a fresh sync to enable album recommendations. Please re-sync from Settings or the footer Refresh link.",
+                )
+            raise HTTPException(status_code=400, detail="No albums match your filters. Try broadening your genre or decade selection.")
+
+        candidates = [AlbumCandidate(**c) for c in candidates_raw]
+
+        # Build taste profile for discovery mode (from unfiltered candidates)
+        if request.mode == "discovery":
+            all_raw = await asyncio.to_thread(
+                library_cache.get_album_candidates, genres=None, decades=None
+            )
+            all_candidates = [AlbumCandidate(**c) for c in all_raw]
+            taste_profile = pipeline.build_taste_profile(all_candidates)
+
+    try:
+        # Run gap analysis + question generation
+        dimension_ids = await asyncio.to_thread(
+            pipeline.gap_analysis, request.prompt, "pending"
+        )
+        questions = await asyncio.to_thread(
+            pipeline.generate_questions, request.prompt, dimension_ids, "pending"
+        )
+
+        # Create session
+        session_state = RecommendSessionState(
+            mode=request.mode,
+            prompt=request.prompt,
+            filters={"genres": request.genres, "decades": request.decades},
+            questions=questions,
+            album_candidates=candidates,
+            taste_profile=taste_profile,
+            familiarity_enabled=request.familiarity_enabled,
+        )
+        session_id = pipeline.create_session(session_state)
+
+        # Calculate token count and cost
+        # (these are tracked internally via _log_cost but we sum for the response)
+        return RecommendQuestionsResponse(
+            questions=questions,
+            session_id=session_id,
+            token_count=0,  # Will be populated from actual LLM calls
+            estimated_cost=0.0,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Question generation failed: {str(e)}")
+
+
+@app.post("/api/recommend/generate")
+async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResponse:
+    """Generate album recommendations with SSE progress streaming."""
+    import json as _json
+    import logging as _logging
+
+    pipeline = _get_pipeline()
+    if not pipeline:
+        raise HTTPException(status_code=503, detail="LLM not configured")
+
+    session = pipeline.get_session(request.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    # Store answers in session
+    session.answers = request.answers
+    session.answer_texts = request.answer_texts
+
+    async def event_stream():
+        research_warning = None
+        research_data = {}
+        cost_logger = _logging.getLogger("recommend.cost")
+
+        try:
+            is_discovery = session.mode == "discovery"
+            selecting_msg = "Finding albums to recommend..." if is_discovery else "Choosing albums from your library..."
+
+            # Step 1: Select albums
+            yield f"event: progress\ndata: {_json.dumps({'step': 'selecting', 'message': selecting_msg})}\n\n"
+
+            if is_discovery and session.taste_profile:
+                recommendations = await asyncio.to_thread(
+                    pipeline.select_discovery_albums,
+                    prompt=session.prompt,
+                    answers=session.answers,
+                    answer_texts=session.answer_texts,
+                    taste_profile=session.taste_profile,
+                    session_id=request.session_id,
+                )
+            else:
+                recommendations = await asyncio.to_thread(
+                    pipeline.select_albums,
+                    prompt=session.prompt,
+                    answers=session.answers,
+                    answer_texts=session.answer_texts,
+                    album_candidates=session.album_candidates,
+                    session_id=request.session_id,
+                )
+
+            # Step 2: Research primary album
+            yield f"event: progress\ndata: {_json.dumps({'step': 'researching_primary', 'message': 'Researching an album...'})}\n\n"
+
+            research_client = _get_research_client()
+            primary = next((r for r in recommendations if r.rank == "primary"), None)
+            if primary:
+                try:
+                    rd = await research_client.research_album(primary.artist, primary.album, full=True)
+                    if rd.musicbrainz_id:
+                        research_data[f"{primary.artist}|||{primary.album}"] = rd
+                        primary.research_available = True
+
+                        # Discovery mode: validate against research and fetch cover art
+                        if is_discovery:
+                            valid = await asyncio.to_thread(
+                                pipeline.validate_discovery_album,
+                                primary, rd, session.prompt, request.session_id,
+                            )
+                            if not valid:
+                                _logging.getLogger(__name__).info("Primary discovery album failed validation")
+                            # Fetch cover art for discovery mode
+                            rg_data = await research_client.lookup_release_group(rd.musicbrainz_id)
+                            if rg_data and rg_data.get("earliest_release_mbid"):
+                                art_url = await research_client.fetch_cover_art(rg_data["earliest_release_mbid"])
+                                if art_url:
+                                    primary.art_url = art_url
+                except Exception as e:
+                    _logging.getLogger(__name__).warning("Primary research failed: %s", e)
+                    research_warning = "Research was unavailable for the primary album — factual details could not be verified and may be approximate."
+
+            # Step 3: Research secondary albums (light research)
+            yield f"event: progress\ndata: {_json.dumps({'step': 'researching_secondary', 'message': 'Looking up additional picks...'})}\n\n"
+
+            secondaries = [r for r in recommendations if r.rank == "secondary"]
+            for sec in secondaries:
+                try:
+                    rd = await research_client.research_album(sec.artist, sec.album, full=False)
+                    if rd.musicbrainz_id:
+                        research_data[f"{sec.artist}|||{sec.album}"] = rd
+                        sec.research_available = True
+
+                        # Fetch cover art for discovery mode secondaries
+                        if is_discovery:
+                            rg_data = await research_client.lookup_release_group(rd.musicbrainz_id)
+                            if rg_data and rg_data.get("earliest_release_mbid"):
+                                art_url = await research_client.fetch_cover_art(rg_data["earliest_release_mbid"])
+                                if art_url:
+                                    sec.art_url = art_url
+                except Exception as e:
+                    _logging.getLogger(__name__).warning("Secondary research failed for %s: %s", sec.album, e)
+
+            # Query familiarity if enabled (library mode only)
+            familiarity_data = None
+            if session.familiarity_enabled and not is_discovery:
+                plex = get_plex_client()
+                if plex:
+                    rating_keys = [r.rating_key for r in recommendations if r.rating_key]
+                    if rating_keys:
+                        try:
+                            familiarity_data = await asyncio.to_thread(
+                                plex.get_album_play_history, rating_keys
+                            )
+                        except Exception as e:
+                            _logging.getLogger(__name__).warning("Familiarity query failed: %s", e)
+
+            # Step 3.5: Extract facts from research (primary album only)
+            extracted_facts = {}
+            primary = next((r for r in recommendations if r.rank == "primary"), None)
+            primary_key = f"{primary.artist}|||{primary.album}" if primary else None
+
+            if primary_key and primary_key in research_data:
+                yield f"event: progress\ndata: {_json.dumps({'step': 'extracting_facts', 'message': 'Analyzing research sources...'})}\n\n"
+
+                try:
+                    facts = await asyncio.to_thread(
+                        pipeline.extract_facts,
+                        artist=primary.artist,
+                        album=primary.album,
+                        research=research_data[primary_key],
+                        session_id=request.session_id,
+                    )
+                    extracted_facts[primary_key] = facts
+                except Exception as e:
+                    _logging.getLogger(__name__).warning("Fact extraction failed: %s", e)
+
+            # Step 4: Write pitches (with research data, extracted facts, and familiarity)
+            yield f"event: progress\ndata: {_json.dumps({'step': 'writing', 'message': 'Writing the pitch...'})}\n\n"
+
+            recommendations = await asyncio.to_thread(
+                pipeline.write_pitches,
+                recommendations=recommendations,
+                prompt=session.prompt,
+                answers=session.answers,
+                answer_texts=session.answer_texts,
+                session_id=request.session_id,
+                research=research_data if research_data else None,
+                familiarity=familiarity_data,
+                extracted_facts=extracted_facts if extracted_facts else None,
+            )
+
+            # Step 5: Validate primary pitch (only if we have extracted facts)
+            if primary and primary_key and primary_key in extracted_facts:
+                yield f"event: progress\ndata: {_json.dumps({'step': 'validating', 'message': 'Fact-checking the pitch...'})}\n\n"
+
+                try:
+                    validation = await asyncio.to_thread(
+                        pipeline.validate_pitch,
+                        pitch=primary.pitch,
+                        facts=extracted_facts[primary_key],
+                        session_id=request.session_id,
+                    )
+
+                    if not validation.valid:
+                        _logging.getLogger(__name__).info(
+                            "Pitch validation found %d issues, rewriting",
+                            len(validation.issues),
+                        )
+                        yield f"event: progress\ndata: {_json.dumps({'step': 'rewriting', 'message': 'Refining the pitch...'})}\n\n"
+
+                        # Build answers string for rewrite
+                        answer_parts = []
+                        for i, ans in enumerate(session.answers):
+                            if ans:
+                                text = ans
+                                if i < len(session.answer_texts) and session.answer_texts[i]:
+                                    text += f" ({session.answer_texts[i]})"
+                                answer_parts.append(text)
+                        answers_str = "; ".join(answer_parts) if answer_parts else "no specific preferences"
+
+                        await asyncio.to_thread(
+                            pipeline.rewrite_pitch,
+                            rec=primary,
+                            facts=extracted_facts[primary_key],
+                            validation=validation,
+                            prompt=session.prompt,
+                            answers_str=answers_str,
+                            session_id=request.session_id,
+                        )
+
+                        # Re-validate the rewrite
+                        revalidation = await asyncio.to_thread(
+                            pipeline.validate_pitch,
+                            pitch=primary.pitch,
+                            facts=extracted_facts[primary_key],
+                            session_id=request.session_id,
+                        )
+
+                        if not revalidation.valid:
+                            _logging.getLogger(__name__).warning(
+                                "Pitch still has %d issues after rewrite",
+                                len(revalidation.issues),
+                            )
+                            if not research_warning:
+                                research_warning = (
+                                    "Some details could not be fully verified "
+                                    "against available sources."
+                                )
+                except Exception as e:
+                    _logging.getLogger(__name__).warning("Pitch validation failed: %s", e)
+
+            # Set research warning if no research was available at all
+            if not research_data:
+                research_warning = "Research was unavailable — factual details could not be verified and may be approximate."
+
+            # Final result
+            result = RecommendGenerateResponse(
+                recommendations=recommendations,
+                token_count=0,
+                estimated_cost=0.0,
+                research_warning=research_warning,
+            )
+            yield f"event: result\ndata: {result.model_dump_json()}\n\n"
+
+            # Log cost summary
+            cost_logger.info(
+                "recommend.cost_summary | session=%s albums_researched=%d facts_extracted=%d research_warning=%s",
+                request.session_id,
+                len(research_data),
+                len(extracted_facts),
+                research_warning is not None,
+            )
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            error_data = _json.dumps({"error": str(e)})
+            yield f"event: error\ndata: {error_data}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # =============================================================================
