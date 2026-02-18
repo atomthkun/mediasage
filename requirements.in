@@ -12,3 +12,4 @@ rapidfuzz
 unidecode
 httpx
 json-repair
+readability-lxml
