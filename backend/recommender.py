@@ -161,6 +161,7 @@ class RecommendationPipeline:
             track_highlights=raw.get("track_highlights", ""),
             common_misconceptions=raw.get("common_misconceptions", ""),
             source_coverage=raw.get("source_coverage", ""),
+            track_listing=research.track_listing,  # Authoritative MusicBrainz data
         )
 
     # ── Session management ──────────────────────────────────────────────
@@ -290,11 +291,22 @@ class RecommendationPipeline:
         answer_texts: list[str],
         album_candidates: list[AlbumCandidate],
         session_id: str,
+        familiarity_pref: str = "any",
+        familiarity_data: dict[str, dict] | None = None,
+        previously_recommended: list[str] | None = None,
     ) -> list[AlbumRecommendation]:
         """Select 1 primary + 2 secondary albums from the candidate pool.
 
         Returns list of AlbumRecommendation (without pitches yet).
         """
+        # Filter out previously recommended albums
+        if previously_recommended:
+            excluded = set(previously_recommended)
+            album_candidates = [
+                c for c in album_candidates
+                if f"{c.album_artist.lower()}|||{c.album.lower()}" not in excluded
+            ]
+
         # Edge case: very small pool — return all candidates directly
         if len(album_candidates) <= 3:
             recs = []
@@ -314,7 +326,11 @@ class RecommendationPipeline:
         album_lines = []
         for a in album_candidates:
             genres_str = ", ".join(a.genres[:3]) if a.genres else "Unknown"
-            album_lines.append(f"- {a.album_artist} — {a.album} ({a.year or '?'}) [{genres_str}]")
+            line = f"- {a.album_artist} — {a.album} ({a.year or '?'}) [{genres_str}]"
+            if familiarity_pref != "any" and familiarity_data and a.parent_rating_key in familiarity_data:
+                level = familiarity_data[a.parent_rating_key]["level"]
+                line += f" {{{level}}}"
+            album_lines.append(line)
         album_text = "\n".join(album_lines)
 
         # Build answer context
@@ -329,6 +345,24 @@ class RecommendationPipeline:
                 answer_parts.append(f"Q{i+1}: skipped")
         answers_text = "\n".join(answer_parts)
 
+        familiarity_directive = ""
+        if familiarity_pref == "comfort":
+            familiarity_directive = (
+                "\n\nFAMILIARITY PREFERENCE: The user wants comfort picks. "
+                "Strongly prefer albums marked {well-loved}. Avoid {unplayed} albums."
+            )
+        elif familiarity_pref == "rediscover":
+            familiarity_directive = (
+                "\n\nFAMILIARITY PREFERENCE: The user wants to rediscover forgotten albums. "
+                "Strongly prefer albums marked {light}, especially those not played recently. "
+                "Avoid {unplayed} albums."
+            )
+        elif familiarity_pref == "hidden_gems":
+            familiarity_directive = (
+                "\n\nFAMILIARITY PREFERENCE: The user wants hidden gems they haven't explored. "
+                "Strongly prefer albums marked {unplayed}. Avoid {well-loved} albums."
+            )
+
         system = (
             "You are a music recommendation expert. Pick exactly 3 albums from the provided list "
             "that best match the user's request and clarifying answers. The first pick is the PRIMARY "
@@ -336,6 +370,7 @@ class RecommendationPipeline:
             "Return a JSON array of 3 objects, each with: artist (string), album (string), rank "
             "(\"primary\" for first, \"secondary\" for others). Pick from the list EXACTLY as written.\n"
             "No explanation, just the JSON array."
+            f"{familiarity_directive}"
         )
 
         small_pool_note = ""
@@ -397,13 +432,15 @@ class RecommendationPipeline:
         answer_texts: list[str],
         session_id: str,
         research: dict[str, ResearchData] | None = None,
-        familiarity: dict[str, str] | None = None,
+        familiarity_pref: str = "any",
+        familiarity_data: dict[str, dict] | None = None,
         extracted_facts: dict[str, ExtractedFacts] | None = None,
     ) -> list[AlbumRecommendation]:
         """Write sommelier pitches for each recommendation.
 
         Args:
-            familiarity: Optional dict mapping rating_key -> "unplayed"|"light"|"well-loved"
+            familiarity_pref: User's familiarity preference ("any"|"comfort"|"rediscover"|"hidden_gems")
+            familiarity_data: Optional dict mapping rating_key -> {"level": str, "last_viewed_at": str|None}
             extracted_facts: Optional dict mapping "artist|||album" -> ExtractedFacts
 
         Returns the same recommendations with pitches filled in.
@@ -413,8 +450,8 @@ class RecommendationPipeline:
         for rec in recommendations:
             desc = f"[{rec.rank.upper()}] {rec.artist} — {rec.album} ({rec.year or '?'})"
             # Add familiarity context
-            if familiarity and rec.rating_key and rec.rating_key in familiarity:
-                level = familiarity[rec.rating_key]
+            if familiarity_data and rec.rating_key and rec.rating_key in familiarity_data:
+                level = familiarity_data[rec.rating_key]["level"]
                 desc += f"\nFamiliarity: {level}"
 
             # Add extracted facts if available (preferred over raw research)
@@ -465,15 +502,23 @@ class RecommendationPipeline:
         answers_str = "; ".join(answer_parts) if answer_parts else "no specific preferences"
 
         familiarity_guidance = ""
-        if familiarity:
+        if familiarity_pref == "comfort":
             familiarity_guidance = (
-                "\n\nFamiliarity framing guidance (when Familiarity data is provided for an album):\n"
-                "- 'unplayed': Frame as discovery — 'you haven't given this a real shot yet', "
-                "emphasize what makes it worth a dedicated listen\n"
-                "- 'light': Frame as deeper exploration — 'you haven't done a full listen', "
-                "highlight what they'll discover on a closer listen\n"
-                "- 'well-loved': Frame as revisit — 'when's the last time you sat down with this?', "
-                "offer a fresh angle or new way to appreciate it\n"
+                "\n\nFamiliarity framing: The user wants comfort picks — albums they already love. "
+                "Frame pitches as celebrating a favorite: remind them why they love it, "
+                "suggest a fresh angle to appreciate it anew.\n"
+            )
+        elif familiarity_pref == "rediscover":
+            familiarity_guidance = (
+                "\n\nFamiliarity framing: The user wants to rediscover forgotten albums. "
+                "Frame pitches as 'when's the last time you sat down with this?' — "
+                "highlight what they'll notice on a return visit.\n"
+            )
+        elif familiarity_pref == "hidden_gems":
+            familiarity_guidance = (
+                "\n\nFamiliarity framing: The user wants hidden gems they haven't explored. "
+                "Frame pitches as exciting discovery: 'you haven't given this a real shot yet' — "
+                "emphasize what makes it worth a dedicated listen.\n"
             )
 
         grounding_rules = ""
@@ -587,6 +632,9 @@ class RecommendationPipeline:
             facts_text += f"- Track highlights: {facts.track_highlights}\n"
         if facts.common_misconceptions:
             facts_text += f"- Common misconceptions: {facts.common_misconceptions}\n"
+        if facts.track_listing:
+            facts_text += "\nAUTHORITATIVE TRACK LISTING:\n"
+            facts_text += "\n".join(f"  - {t}" for t in facts.track_listing) + "\n"
 
         system = (
             "You are a fact-checker reviewing an album recommendation pitch against "
@@ -595,7 +643,10 @@ class RecommendationPipeline:
             "2. Are not supported by any source and could be wrong (specific biographical "
             "events, specific recording details, specific personnel claims)\n"
             "3. Overgeneralize from the artist's catalog to this specific album\n"
-            "4. Mischaracterize events (e.g., 'toured with' vs 'rehearsed with')\n\n"
+            "4. Mischaracterize events (e.g., 'toured with' vs 'rehearsed with')\n"
+            "5. Reference specific track names that do NOT appear in the AUTHORITATIVE TRACK "
+            "LISTING. If the pitch mentions a track by name, it must match a track in the "
+            "listing (minor punctuation differences are OK).\n\n"
             "Do NOT flag:\n"
             "- Subjective/editorial language (e.g., 'sonic warm bath', 'ethereal')\n"
             "- Vague statements that don't make specific factual claims\n"
@@ -663,6 +714,10 @@ class RecommendationPipeline:
         ]:
             if field_val:
                 facts_parts.append(f"- {field_name}: {field_val}")
+        if facts.track_listing:
+            facts_parts.append(
+                "- Track listing: " + ", ".join(facts.track_listing)
+            )
         facts_text = "\n".join(facts_parts)
 
         system = (
@@ -742,6 +797,7 @@ class RecommendationPipeline:
         answer_texts: list[str],
         taste_profile: TasteProfile,
         session_id: str,
+        previously_recommended: list[str] | None = None,
     ) -> list[AlbumRecommendation]:
         """Select 1 primary + 2 secondary albums NOT in the user's library.
 
@@ -788,11 +844,23 @@ class RecommendationPipeline:
             "No explanation, just the JSON array."
         )
 
+        # Add previously recommended albums to exclusion
+        prev_text = ""
+        if previously_recommended:
+            prev_lines = []
+            for key in previously_recommended:
+                parts = key.split("|||")
+                if len(parts) == 2:
+                    prev_lines.append(f"- {parts[0]} — {parts[1]}")
+            if prev_lines:
+                prev_text = "\n\nAlready recommended (DO NOT repeat these):\n" + "\n".join(prev_lines)
+
         user_prompt = (
             f"User wants: \"{prompt}\"\n\n"
             f"Clarifying answers:\n{answers_text}\n\n"
             f"User's taste profile:\n{taste_text}\n\n"
-            f"Albums user already owns (DO NOT recommend these):\n{exclusion_text}\n\n"
+            f"Albums user already owns (DO NOT recommend these):\n{exclusion_text}"
+            f"{prev_text}\n\n"
             f"Recommend 3 albums they don't own: 1 primary + 2 secondary."
         )
 

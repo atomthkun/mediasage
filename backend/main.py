@@ -38,6 +38,8 @@ from backend.models import (
     RecommendGenerateResponse,
     RecommendQuestionsRequest,
     RecommendQuestionsResponse,
+    RecommendSwitchModeRequest,
+    RecommendSwitchModeResponse,
     SavePlaylistRequest,
     UpdatePlaylistRequest,
     UpdatePlaylistResponse,
@@ -63,6 +65,7 @@ from backend.models import OllamaModelsResponse, OllamaModelInfo, OllamaStatus
 from backend.analyzer import analyze_prompt as do_analyze_prompt, analyze_track as do_analyze_track
 from backend.generator import generate_playlist as do_generate_playlist, generate_playlist_stream
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -879,7 +882,7 @@ async def recommend_questions(request: RecommendQuestionsRequest) -> RecommendQu
             questions=questions,
             album_candidates=candidates,
             taste_profile=taste_profile,
-            familiarity_enabled=request.familiarity_enabled,
+            familiarity_pref=request.familiarity_pref,
         )
         session_id = pipeline.create_session(session_state)
 
@@ -893,6 +896,58 @@ async def recommend_questions(request: RecommendQuestionsRequest) -> RecommendQu
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Question generation failed: {str(e)}")
+
+
+@app.post("/api/recommend/switch-mode", response_model=RecommendSwitchModeResponse)
+async def recommend_switch_mode(request: RecommendSwitchModeRequest) -> RecommendSwitchModeResponse:
+    """Switch a recommendation session to a different mode, keeping answers."""
+    pipeline = _get_pipeline()
+    if not pipeline:
+        raise HTTPException(status_code=503, detail="LLM not configured")
+
+    old_session = pipeline.get_session(request.session_id)
+    if not old_session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    if request.mode == old_session.mode:
+        return RecommendSwitchModeResponse(session_id=request.session_id)
+
+    from backend.models import AlbumCandidate, RecommendSessionState
+
+    # Rebuild candidates and taste profile for the new mode
+    candidates = []
+    taste_profile = None
+
+    if library_cache.has_cached_tracks():
+        candidates_raw = await asyncio.to_thread(
+            library_cache.get_album_candidates,
+            genres=old_session.filters.get("genres") or None if request.mode == "library" else None,
+            decades=old_session.filters.get("decades") or None if request.mode == "library" else None,
+        )
+        candidates = [AlbumCandidate(**c) for c in candidates_raw]
+
+        if request.mode == "discovery":
+            all_raw = await asyncio.to_thread(
+                library_cache.get_album_candidates, genres=None, decades=None
+            )
+            all_candidates = [AlbumCandidate(**c) for c in all_raw]
+            taste_profile = pipeline.build_taste_profile(all_candidates)
+
+    new_session = RecommendSessionState(
+        mode=request.mode,
+        prompt=old_session.prompt,
+        filters=old_session.filters,
+        questions=old_session.questions,
+        answers=old_session.answers,
+        answer_texts=old_session.answer_texts,
+        album_candidates=candidates,
+        taste_profile=taste_profile,
+        familiarity_pref=old_session.familiarity_pref,
+        previously_recommended=old_session.previously_recommended,
+    )
+    new_session_id = pipeline.create_session(new_session)
+
+    return RecommendSwitchModeResponse(session_id=new_session_id)
 
 
 @app.post("/api/recommend/generate")
@@ -913,6 +968,20 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
     session.answers = request.answers
     session.answer_texts = request.answer_texts
 
+    def _apply_year_override(rec, rd, log):
+        """Override rec.year with MusicBrainz release_date year when available."""
+        if rd.release_date and len(rd.release_date) >= 4:
+            try:
+                mb_year = int(rd.release_date[:4])
+                if rec.year != mb_year:
+                    log.info(
+                        "Year override: Plex=%s → MusicBrainz=%s for %s — %s",
+                        rec.year, mb_year, rec.artist, rec.album,
+                    )
+                    rec.year = mb_year
+            except ValueError:
+                pass
+
     async def event_stream():
         research_warning = None
         research_data = {}
@@ -925,6 +994,18 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
             # Step 1: Select albums
             yield f"event: progress\ndata: {_json.dumps({'step': 'selecting', 'message': selecting_msg})}\n\n"
 
+            # Query familiarity from cache if pref is not "any" (library mode only)
+            familiarity_data = None
+            if session.familiarity_pref != "any" and not is_discovery:
+                try:
+                    candidate_keys = [c.parent_rating_key for c in session.album_candidates if c.parent_rating_key]
+                    if candidate_keys:
+                        familiarity_data = await asyncio.to_thread(
+                            library_cache.get_album_familiarity, candidate_keys
+                        )
+                except Exception as e:
+                    _logging.getLogger(__name__).warning("Familiarity query failed: %s", e)
+
             if is_discovery and session.taste_profile:
                 recommendations = await asyncio.to_thread(
                     pipeline.select_discovery_albums,
@@ -933,6 +1014,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                     answer_texts=session.answer_texts,
                     taste_profile=session.taste_profile,
                     session_id=request.session_id,
+                    previously_recommended=session.previously_recommended or None,
                 )
             else:
                 recommendations = await asyncio.to_thread(
@@ -942,6 +1024,9 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                     answer_texts=session.answer_texts,
                     album_candidates=session.album_candidates,
                     session_id=request.session_id,
+                    familiarity_pref=session.familiarity_pref,
+                    familiarity_data=familiarity_data,
+                    previously_recommended=session.previously_recommended or None,
                 )
 
             # Step 2: Research primary album
@@ -951,10 +1036,11 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
             primary = next((r for r in recommendations if r.rank == "primary"), None)
             if primary:
                 try:
-                    rd = await research_client.research_album(primary.artist, primary.album, full=True)
+                    rd = await research_client.research_album(primary.artist, primary.album, full=True, year=primary.year)
                     if rd.musicbrainz_id:
                         research_data[f"{primary.artist}|||{primary.album}"] = rd
                         primary.research_available = True
+                        _apply_year_override(primary, rd, _logging.getLogger(__name__))
 
                         # Discovery mode: validate against research and fetch cover art
                         if is_discovery:
@@ -980,10 +1066,11 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
             secondaries = [r for r in recommendations if r.rank == "secondary"]
             for sec in secondaries:
                 try:
-                    rd = await research_client.research_album(sec.artist, sec.album, full=False)
+                    rd = await research_client.research_album(sec.artist, sec.album, full=False, year=sec.year)
                     if rd.musicbrainz_id:
                         research_data[f"{sec.artist}|||{sec.album}"] = rd
                         sec.research_available = True
+                        _apply_year_override(sec, rd, _logging.getLogger(__name__))
 
                         # Fetch cover art for discovery mode secondaries
                         if is_discovery:
@@ -994,20 +1081,6 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                                     sec.art_url = art_url
                 except Exception as e:
                     _logging.getLogger(__name__).warning("Secondary research failed for %s: %s", sec.album, e)
-
-            # Query familiarity if enabled (library mode only)
-            familiarity_data = None
-            if session.familiarity_enabled and not is_discovery:
-                plex = get_plex_client()
-                if plex:
-                    rating_keys = [r.rating_key for r in recommendations if r.rating_key]
-                    if rating_keys:
-                        try:
-                            familiarity_data = await asyncio.to_thread(
-                                plex.get_album_play_history, rating_keys
-                            )
-                        except Exception as e:
-                            _logging.getLogger(__name__).warning("Familiarity query failed: %s", e)
 
             # Step 3.5: Extract facts from research (primary album only)
             extracted_facts = {}
@@ -1040,7 +1113,8 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 answer_texts=session.answer_texts,
                 session_id=request.session_id,
                 research=research_data if research_data else None,
-                familiarity=familiarity_data,
+                familiarity_pref=session.familiarity_pref,
+                familiarity_data=familiarity_data,
                 extracted_facts=extracted_facts if extracted_facts else None,
             )
 
@@ -1116,6 +1190,14 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 research_warning=research_warning,
             )
             yield f"event: result\ndata: {result.model_dump_json()}\n\n"
+
+            # Record shown albums so "Show me another" won't repeat them.
+            # Keep only the last 30 (10 rounds) so older picks rotate back in.
+            for rec in recommendations:
+                key = f"{rec.artist.lower()}|||{rec.album.lower()}"
+                if key not in session.previously_recommended:
+                    session.previously_recommended.append(key)
+            session.previously_recommended = session.previously_recommended[-30:]
 
             # Log cost summary
             cost_logger.info(

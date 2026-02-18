@@ -47,6 +47,9 @@ MODEL_CONTEXT_LIMITS = {
 # Tokens per track (based on real-world testing, Feb 2026)
 TOKENS_PER_TRACK = 40
 
+# Tokens per album for recommendation flow (artist, album, year, genres)
+TOKENS_PER_ALBUM = 25
+
 
 @dataclass
 class LLMResponse:

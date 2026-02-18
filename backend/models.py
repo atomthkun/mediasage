@@ -593,6 +593,7 @@ class ExtractedFacts(BaseModel):
     track_highlights: str = ""
     common_misconceptions: str = ""
     source_coverage: str = ""
+    track_listing: list[str] = []  # Authoritative list from MusicBrainz, not LLM-extracted
 
 
 class PitchIssue(BaseModel):
@@ -631,7 +632,8 @@ class RecommendSessionState(BaseModel):
     answer_texts: list[str] = []
     album_candidates: list[AlbumCandidate] = []
     taste_profile: TasteProfile | None = None
-    familiarity_enabled: bool = False
+    familiarity_pref: str = "any"  # "any" | "comfort" | "rediscover" | "hidden_gems"
+    previously_recommended: list[str] = []  # "artist|||album" keys shown in prior rounds
 
 
 class RecommendQuestionsRequest(BaseModel):
@@ -641,7 +643,7 @@ class RecommendQuestionsRequest(BaseModel):
     mode: str = "library"
     genres: list[str] = []
     decades: list[str] = []
-    familiarity_enabled: bool = False
+    familiarity_pref: str = "any"  # "any" | "comfort" | "rediscover" | "hidden_gems"
 
 
 class RecommendQuestionsResponse(BaseModel):
@@ -651,6 +653,19 @@ class RecommendQuestionsResponse(BaseModel):
     session_id: str
     token_count: int = 0
     estimated_cost: float = 0.0
+
+
+class RecommendSwitchModeRequest(BaseModel):
+    """Request to switch a recommendation session to a different mode."""
+
+    session_id: str
+    mode: str  # "library" or "discovery"
+
+
+class RecommendSwitchModeResponse(BaseModel):
+    """Response after switching recommendation mode."""
+
+    session_id: str
 
 
 class RecommendGenerateRequest(BaseModel):
