@@ -52,14 +52,43 @@ class MusicResearchClient:
                 await asyncio.sleep(MB_RATE_LIMIT - elapsed)
             self._last_mb_request = time.time()
 
-    async def search_album(self, artist: str, album: str) -> str | None:
+    @staticmethod
+    def _clean_album_name(album: str) -> str | None:
+        """Strip common Plex parenthetical suffixes from album names.
+
+        Returns the cleaned name, or None if nothing was stripped.
+        """
+        import re
+        cleaned = re.sub(
+            r"\s*\("
+            r"(?:Explicit|Clean|Deluxe|Special|Expanded|Anniversary|Limited|"
+            r"Bonus Track|Collector(?:'s)?|International|Standard|Super Deluxe|"
+            r"Premium|Platinum|Ultimate|Complete|Original|Extended)"
+            r"[^)]*\)\s*$",
+            "",
+            album,
+            flags=re.IGNORECASE,
+        ).strip()
+        return cleaned if cleaned and cleaned != album else None
+
+    async def search_album(
+        self, artist: str, album: str, year: int | None = None
+    ) -> str | None:
         """Search MusicBrainz for a release group by artist+album.
+
+        Tries three strategies in order:
+        1. Strict: artist + full album name
+        2. Cleaned: artist + album name without parenthetical suffixes
+           (handles Plex metadata like "Explicit Version", "Deluxe Edition")
+        3. Album-only fallback with scoring
+           (handles mismatched artist names: soundtracks, cast recordings)
 
         Returns the release group MBID, or None if not found.
         """
         client = await self._get_client()
         await self._rate_limit()
 
+        # Step 1: Strict search — artist + full album name
         query = f'artist:"{artist}" AND releasegroup:"{album}"'
         try:
             resp = await client.get(
@@ -70,14 +99,103 @@ class MusicResearchClient:
             data = resp.json()
 
             release_groups = data.get("release-groups", [])
-            if not release_groups:
-                logger.info("No MusicBrainz match for %s — %s", artist, album)
-                return None
-
-            return release_groups[0].get("id")
+            if release_groups:
+                return release_groups[0].get("id")
         except Exception as e:
             logger.warning("MusicBrainz search failed for %s — %s: %s", artist, album, e)
             return None
+
+        # Step 2: Cleaned search — strip Plex parenthetical suffixes
+        cleaned = self._clean_album_name(album)
+        if cleaned:
+            logger.info("Trying cleaned album name: %s → %s", album, cleaned)
+            await self._rate_limit()
+
+            query = f'artist:"{artist}" AND releasegroup:"{cleaned}"'
+            try:
+                resp = await client.get(
+                    f"{MB_BASE_URL}/release-group",
+                    params={"query": query, "fmt": "json", "limit": 5},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+                release_groups = data.get("release-groups", [])
+                if release_groups:
+                    return release_groups[0].get("id")
+            except Exception as e:
+                logger.warning("MusicBrainz cleaned search failed: %s", e)
+
+        # Step 3: Album-only fallback (handles mismatched artist names)
+        search_name = cleaned or album
+        logger.info("Strict search missed for %s — %s, trying album-only fallback", artist, album)
+        await self._rate_limit()
+
+        query = f'releasegroup:"{search_name}"'
+        try:
+            resp = await client.get(
+                f"{MB_BASE_URL}/release-group",
+                params={"query": query, "fmt": "json", "limit": 10},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            candidates = data.get("release-groups", [])
+            if not candidates:
+                logger.info("No MusicBrainz match for %s — %s (fallback)", artist, album)
+                return None
+
+            return self._pick_best_release_group(candidates, search_name, year)
+        except Exception as e:
+            logger.warning("MusicBrainz fallback search failed for %s — %s: %s", artist, album, e)
+            return None
+
+    @staticmethod
+    def _pick_best_release_group(
+        candidates: list[dict], album: str, year: int | None
+    ) -> str | None:
+        """Score and pick the best release group from fallback results.
+
+        Prefers: exact title match, Album type, year match, higher MB score.
+        """
+        album_lower = album.lower()
+        best_id = None
+        best_score = -1
+
+        for rg in candidates:
+            score = 0
+            title = rg.get("title", "")
+            title_lower = title.lower()
+
+            # Title match: exact > starts-with > contains
+            if title_lower == album_lower:
+                score += 50
+            elif title_lower.startswith(album_lower):
+                score += 30
+            elif album_lower in title_lower:
+                score += 10
+
+            # Prefer Album type over Other/unknown
+            if rg.get("primary-type") == "Album":
+                score += 20
+
+            # Year match is a strong signal
+            if year:
+                release_date = rg.get("first-release-date", "")
+                if release_date.startswith(str(year)):
+                    score += 40
+
+            # MB relevance score (0-100, normalized)
+            mb_score = rg.get("score", 0)
+            score += mb_score / 10
+
+            if score > best_score:
+                best_score = score
+                best_id = rg.get("id")
+
+        if best_id:
+            logger.info("Fallback picked release group %s (score=%d)", best_id, best_score)
+        return best_id
 
     async def lookup_release_group(self, mbid: str) -> dict | None:
         """Look up a release group by MBID with URL rels and releases.
@@ -105,6 +223,8 @@ class MusicResearchClient:
                 url = rel.get("url", {}).get("resource", "")
                 if rel_type == "wikipedia":
                     result["wikipedia_url"] = url
+                elif rel_type == "wikidata":
+                    result["wikidata_url"] = url
                 elif rel_type == "discogs":
                     result["discogs_url"] = url
                 elif rel_type == "review":
@@ -202,6 +322,33 @@ class MusicResearchClient:
             logger.warning("Wikipedia fetch failed for %s: %s", wikipedia_url, e)
             return None
 
+    async def resolve_wikidata_to_wikipedia(self, wikidata_url: str) -> str | None:
+        """Resolve a Wikidata URL to an English Wikipedia article URL.
+
+        Args:
+            wikidata_url: Full Wikidata URL (e.g. https://www.wikidata.org/wiki/Q202996)
+
+        Returns:
+            Wikipedia URL, or None if no English Wikipedia article exists.
+        """
+        client = await self._get_client()
+
+        try:
+            qid = wikidata_url.rstrip("/").split("/")[-1]
+            if not qid.startswith("Q"):
+                return None
+
+            resp = await client.get(
+                f"https://www.wikidata.org/w/rest.php/wikibase/v1/entities/items/{qid}/sitelinks/enwiki"
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("url")
+            return None
+        except Exception as e:
+            logger.warning("Wikidata resolution failed for %s: %s", wikidata_url, e)
+            return None
+
     async def fetch_cover_art(self, release_mbid: str) -> str | None:
         """Fetch front cover art URL from Cover Art Archive.
 
@@ -270,7 +417,7 @@ class MusicResearchClient:
             return None
 
     async def research_album(
-        self, artist: str, album: str, full: bool = True
+        self, artist: str, album: str, full: bool = True, year: int | None = None
     ) -> ResearchData:
         """Run the full research pipeline for an album.
 
@@ -278,6 +425,7 @@ class MusicResearchClient:
             artist: Artist name
             album: Album title
             full: If True, fetch Wikipedia summary too. If False, light research only.
+            year: Optional release year to improve search accuracy.
 
         Returns:
             ResearchData with whatever could be fetched.
@@ -285,7 +433,7 @@ class MusicResearchClient:
         research = ResearchData()
 
         # Step 1: Search for release group
-        rg_mbid = await self.search_album(artist, album)
+        rg_mbid = await self.search_album(artist, album, year=year)
         if not rg_mbid:
             return research
         research.musicbrainz_id = rg_mbid
@@ -308,8 +456,12 @@ class MusicResearchClient:
                 research.credits = release_data.get("credits", {})
 
         # Step 4: Wikipedia summary (full research only)
-        if full and rg_data.get("wikipedia_url"):
-            summary = await self.fetch_wikipedia_summary(rg_data["wikipedia_url"])
+        # Try direct Wikipedia URL first, fall back to Wikidata resolution
+        wikipedia_url = rg_data.get("wikipedia_url")
+        if full and not wikipedia_url and rg_data.get("wikidata_url"):
+            wikipedia_url = await self.resolve_wikidata_to_wikipedia(rg_data["wikidata_url"])
+        if full and wikipedia_url:
+            summary = await self.fetch_wikipedia_summary(wikipedia_url)
             if summary:
                 research.wikipedia_summary = summary
 
