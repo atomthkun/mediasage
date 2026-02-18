@@ -128,6 +128,24 @@ const state = {
     saveMode: 'new',           // 'new' | 'replace' | 'append'
     selectedPlaylistId: null,
     plexPlaylists: [],         // Cached after first fetch (FR-017)
+
+    // Recommendation (006)
+    rec: {
+        mode: 'library',       // 'library' | 'discovery'
+        step: 'setup',         // 'setup' | 'prompt' | 'questions' | 'results'
+        prompt: '',
+        selectedGenres: [],
+        selectedDecades: [],
+        questions: [],
+        answers: [],           // Selected option per question (null = skipped)
+        answerTexts: [],       // Free-text additions per question
+        sessionId: null,
+        recommendations: [],
+        tokenCount: 0,
+        estimatedCost: 0,
+        researchWarning: null,
+        loading: false,
+    },
 };
 
 // =============================================================================
@@ -621,8 +639,8 @@ async function triggerLibrarySync() {
 // UI Updates
 // =============================================================================
 
-const HASH_TO_VIEW = { 'make-playlist': 'create', 'settings': 'settings' };
-const VIEW_TO_HASH = { 'create': 'make-playlist', 'settings': 'settings' };
+const HASH_TO_VIEW = { 'make-playlist': 'create', 'settings': 'settings', 'recommend-album': 'recommend' };
+const VIEW_TO_HASH = { 'create': 'make-playlist', 'settings': 'settings', 'recommend': 'recommend-album' };
 
 function viewFromHash() {
     return HASH_TO_VIEW[location.hash.slice(1)] || 'create';
@@ -634,6 +652,8 @@ function navigateTo(view) {
     updateView();
     if (view === 'settings') {
         loadSettings();
+    } else if (view === 'recommend') {
+        initRecommendView();
     }
 }
 
@@ -2639,6 +2659,9 @@ async function loadSettings() {
 
             try {
                 const stats = await fetchLibraryStats();
+                // Cache genre/decade data so other views don't need a separate fetch
+                state.availableGenres = stats.genres;
+                state.availableDecades = stats.decades;
                 document.getElementById('library-stats').innerHTML = `
                     <p><strong>Total Tracks:</strong> ${stats.total_tracks.toLocaleString()}</p>
                     <p><strong>Genres:</strong> ${stats.genres.length}</p>
@@ -2903,7 +2926,8 @@ async function executePlayQueue(clientId, mode) {
     setLoading(true, 'Sending to device...');
 
     try {
-        const ratingKeys = state.playlist.map(t => t.rating_key);
+        const ratingKeys = state._pendingRatingKeys || state.playlist.map(t => t.rating_key);
+        state._pendingRatingKeys = null;
         const response = await createPlayQueue(ratingKeys, clientId, mode);
 
         setLoading(false);
@@ -3114,6 +3138,881 @@ function handleUpdateSuccessNewPlaylist() {
 }
 
 // =============================================================================
+// Recommendation View (006)
+// =============================================================================
+
+const EXAMPLE_PROMPTS = [
+    "Something for a rainy Sunday morning",
+    "An album to cook dinner to",
+    "Music for a long drive at night",
+    "Something that sounds like autumn feels",
+    "An album to fall asleep to",
+    "Music for deep focus and concentration",
+    "Something to match this glass of whiskey",
+    "An album that feels like a warm hug",
+    "Music for when you need a good cry",
+    "Something adventurous I haven't heard before",
+    "An album for a lazy Saturday afternoon",
+    "Music that sounds like the ocean",
+    "Something to get pumped up for a workout",
+    "An album for a dinner party with friends",
+    "Music for stargazing",
+    "Something melancholy but beautiful",
+    "An album that tells a story from start to finish",
+    "Music for a morning coffee ritual",
+    "Something raw and emotional",
+    "An album that defined a decade",
+    "Music for a road trip through the desert",
+    "Something lush and cinematic",
+    "An album to decompress after a long day",
+    "Music that makes you feel nostalgic",
+    "Something experimental but accessible",
+    "An album for a rainy commute",
+    "Music that sounds like a film soundtrack",
+    "Something to play while reading",
+    "An album that feels like floating",
+    "Music for a bonfire on the beach",
+    "Something dark and atmospheric",
+    "An album that rewards repeat listens",
+    "Music for a quiet evening alone",
+    "Something that captures summer energy",
+    "An album that blends genres in surprising ways",
+    "Music for a Sunday morning with the paper",
+    "Something that sounds like space",
+    "An album to play at a backyard barbecue",
+    "Music that feels timeless",
+    "Something with incredible production",
+    "An album that changed music forever",
+    "Music for a winter evening by the fire",
+    "Something groovy and danceable",
+    "An album with stunning vocal performances",
+    "Music that captures city life at night",
+    "Something stripped down and honest",
+    "An album for a creative brainstorming session",
+    "Music that sounds like childhood memories",
+    "Something psychedelic and mind-expanding",
+    "An album to introduce someone to jazz",
+    "Music for yoga or meditation",
+    "Something angry but cathartic",
+    "An album with a perfect Side A",
+    "Music for a first date dinner",
+    "Something that makes you want to dance alone in your room",
+    "An album that captures the feeling of heartbreak",
+    "Music for a Sunday drive through the countryside",
+    "Something ethereal and otherworldly",
+    "An album every music fan should hear",
+    "Music that feels like a warm bath",
+    "Something politically charged but artful",
+    "An album that sounds better on vinyl",
+    "Music for a late night coding session",
+    "Something bluesy and soulful",
+    "An album that was ahead of its time",
+    "Music for when the seasons change",
+    "Something minimalist and meditative",
+    "An album that captures youthful rebellion",
+    "Music for a candlelit dinner",
+    "Something funky and infectious",
+    "An album that works as background or foreground",
+    "Music for a foggy morning walk",
+    "Something with incredible guitar work",
+    "An album to rediscover an artist",
+    "Music that captures working-class life",
+    "Something dreamy and shoegaze-y",
+    "An album for after midnight",
+    "Music that tells the story of a place",
+    "Something with complex rhythms and time signatures",
+    "An album that captures a specific moment in history",
+    "Music for washing the dishes",
+    "Something that builds to a climax",
+    "An album with seamless transitions between tracks",
+    "Music for the golden hour",
+    "Something punk but melodic",
+    "An album that feels like a journey",
+    "Music for a thunderstorm",
+    "Something with beautiful string arrangements",
+    "An album you can lose yourself in",
+    "Music for a picnic in the park",
+    "Something that defies easy categorization",
+    "An album to play when you miss someone",
+    "Music that sounds like sunrise",
+    "Something with haunting vocal harmonies",
+    "An album for your most discerning music friend",
+    "Music for when words aren't enough",
+    "Something that makes silence feel different after",
+    "An album to celebrate something",
+    "Music for the end of the world",
+];
+
+let recSyncPollInterval = null;
+
+async function initRecommendView() {
+    // Check if we need to show sync progress instead of the normal UI
+    if (state.config?.plex_connected) {
+        try {
+            const status = await fetchLibraryStatus();
+            if (status.is_syncing) {
+                // Check if album candidates exist yet
+                const preview = await apiCall('/recommend/albums/preview');
+                if (preview.matching_albums === 0) {
+                    showRecSyncOverlay(status);
+                    return;
+                }
+            }
+        } catch {
+            // If status check fails, proceed with normal init
+        }
+        loadRecommendFilters();
+    }
+    renderRecPromptPills();
+    updateRecStep();
+}
+
+function showRecSyncOverlay(status) {
+    const overlay = document.getElementById('rec-sync-overlay');
+    const progress = document.querySelector('.rec-progress');
+    const content = document.querySelector('.rec-step-content');
+    if (!overlay) return;
+
+    // Hide normal UI, show overlay
+    overlay.classList.remove('hidden');
+    if (progress) progress.style.display = 'none';
+    if (content) content.style.display = 'none';
+
+    // Update progress if available
+    if (status.sync_progress) {
+        updateRecSyncProgress(status.sync_progress);
+    }
+
+    // Start polling for completion
+    if (recSyncPollInterval) clearInterval(recSyncPollInterval);
+    recSyncPollInterval = setInterval(async () => {
+        try {
+            const s = await fetchLibraryStatus();
+            if (s.is_syncing && s.sync_progress) {
+                updateRecSyncProgress(s.sync_progress);
+            } else if (!s.is_syncing) {
+                clearInterval(recSyncPollInterval);
+                recSyncPollInterval = null;
+                hideRecSyncOverlay();
+                // Now initialize the real recommend view
+                if (state.config?.plex_connected) {
+                    loadRecommendFilters();
+                }
+                renderRecPromptPills();
+                updateRecStep();
+            }
+        } catch {
+            // Keep polling on transient errors
+        }
+    }, 1500);
+}
+
+function updateRecSyncProgress(syncProgress) {
+    const fill = document.getElementById('rec-sync-progress-fill');
+    const text = document.getElementById('rec-sync-progress-text');
+    if (!fill || !text) return;
+
+    const { phase, current, total } = syncProgress;
+    if (total > 0) {
+        const pct = Math.round((current / total) * 100);
+        fill.style.width = `${pct}%`;
+        text.textContent = `Syncing tracks: ${current.toLocaleString()} / ${total.toLocaleString()} (${pct}%)`;
+    } else if (phase === 'fetching_albums') {
+        fill.style.width = '0%';
+        text.textContent = 'Fetching album metadata...';
+    } else if (phase === 'fetching') {
+        fill.style.width = '0%';
+        text.textContent = 'Fetching tracks from Plex...';
+    }
+}
+
+function hideRecSyncOverlay() {
+    const overlay = document.getElementById('rec-sync-overlay');
+    const progress = document.querySelector('.rec-progress');
+    const content = document.querySelector('.rec-step-content');
+    if (overlay) overlay.classList.add('hidden');
+    if (progress) progress.style.display = '';
+    if (content) content.style.display = '';
+}
+
+async function loadRecommendFilters() {
+    // Reuse genres/decades already fetched by loadSettings() if available
+    if (state.availableGenres.length === 0) {
+        try {
+            const stats = await apiCall('/library/stats');
+            state.availableGenres = stats.genres.map(g => ({ name: g.name, count: g.count }));
+            state.availableDecades = stats.decades.map(d => ({ name: d.name, count: d.count }));
+        } catch (e) {
+            console.error('Failed to load recommend filters:', e);
+            return;
+        }
+    }
+    // No chips selected = no filter (all albums included)
+    renderRecFilterChips();
+    updateRecAlbumPreview();
+}
+
+function renderRecFilterChips() {
+    const genreContainer = document.getElementById('rec-genre-chips');
+    const decadeContainer = document.getElementById('rec-decade-chips');
+    if (!genreContainer || !decadeContainer) return;
+
+    genreContainer.innerHTML = state.availableGenres.map(genre => {
+        const isSelected = state.rec.selectedGenres.includes(genre.name);
+        return `<button class="chip ${isSelected ? 'selected' : ''}"
+                data-genre="${escapeHtml(genre.name)}"
+                aria-pressed="${isSelected}">
+            ${escapeHtml(genre.name)}
+        </button>`;
+    }).join('');
+
+    decadeContainer.innerHTML = state.availableDecades.map(decade => {
+        const isSelected = state.rec.selectedDecades.includes(decade.name);
+        return `<button class="chip ${isSelected ? 'selected' : ''}"
+                data-decade="${escapeHtml(decade.name)}"
+                aria-pressed="${isSelected}">
+            ${escapeHtml(decade.name)}
+        </button>`;
+    }).join('');
+
+    // Sync toggle labels
+    const genreToggle = document.getElementById('rec-genre-toggle-all');
+    if (genreToggle) {
+        const allSelected = state.availableGenres.length > 0 &&
+            state.rec.selectedGenres.length === state.availableGenres.length;
+        genreToggle.textContent = allSelected ? 'Deselect All' : 'Select All';
+    }
+    const decadeToggle = document.getElementById('rec-decade-toggle-all');
+    if (decadeToggle) {
+        const allSelected = state.availableDecades.length > 0 &&
+            state.rec.selectedDecades.length === state.availableDecades.length;
+        decadeToggle.textContent = allSelected ? 'Deselect All' : 'Select All';
+    }
+}
+
+function renderRecPromptPills() {
+    const container = document.getElementById('rec-prompt-pills');
+    if (!container) return;
+    // Pick 12 random prompts
+    const shuffled = [...EXAMPLE_PROMPTS].sort(() => Math.random() - 0.5);
+    const selected = shuffled.slice(0, 12);
+    container.innerHTML = selected.map(p =>
+        `<button class="rec-prompt-pill">${escapeHtml(p)}</button>`
+    ).join('');
+}
+
+function updateRecStep() {
+    const steps = ['setup', 'prompt', 'questions', 'results'];
+    const currentIndex = steps.indexOf(state.rec.step);
+
+    // Update panels
+    document.querySelectorAll('.rec-panel').forEach(panel => {
+        const panelStep = panel.id.replace('rec-step-', '');
+        panel.classList.toggle('active', panelStep === state.rec.step);
+    });
+
+    // Update progress bar
+    document.querySelectorAll('.rec-step').forEach(stepEl => {
+        const stepName = stepEl.dataset.recStep;
+        const stepIndex = steps.indexOf(stepName);
+        stepEl.classList.toggle('active', stepName === state.rec.step);
+        stepEl.classList.toggle('completed', stepIndex < currentIndex);
+    });
+
+    // Update connectors
+    document.querySelectorAll('.rec-step-connector').forEach((connector, i) => {
+        connector.classList.toggle('completed', i < currentIndex);
+    });
+
+    // Hide progress bar on results
+    const recProgress = document.querySelector('.rec-progress');
+    if (recProgress) {
+        recProgress.style.display = state.rec.step === 'results' ? 'none' : '';
+    }
+}
+
+function setRecStep(step) {
+    state.rec.step = step;
+    updateRecStep();
+}
+
+async function updateRecAlbumPreview() {
+    const countEl = document.getElementById('rec-preview-count');
+    const costEl = document.getElementById('rec-preview-cost');
+    if (!countEl) return;
+
+    try {
+        // All selected = no filter (avoids excluding untagged albums)
+        const allGenres = state.availableGenres.length > 0 &&
+            state.rec.selectedGenres.length === state.availableGenres.length;
+        const allDecades = state.availableDecades.length > 0 &&
+            state.rec.selectedDecades.length === state.availableDecades.length;
+        const params = new URLSearchParams();
+        if (!allGenres && state.rec.selectedGenres.length) {
+            params.set('genres', state.rec.selectedGenres.join(','));
+        }
+        if (!allDecades && state.rec.selectedDecades.length) {
+            params.set('decades', state.rec.selectedDecades.join(','));
+        }
+        const data = await apiCall(`/recommend/albums/preview?${params}`);
+        countEl.textContent = `${data.matching_albums} albums`;
+        if (data.estimated_cost > 0) {
+            costEl.textContent = `Est. cost: $${data.estimated_cost.toFixed(4)}`;
+        } else {
+            costEl.textContent = 'Est. cost: Free';
+        }
+    } catch (e) {
+        countEl.textContent = '-- albums';
+        costEl.textContent = 'Est. cost: --';
+    }
+}
+
+async function handleRecQuestions() {
+    if (!state.rec.prompt.trim()) {
+        showError('Please enter a prompt');
+        return;
+    }
+
+    state.rec.loading = true;
+    showRecLoading([
+        { id: 'analyzing', text: 'Analyzing your request...', status: 'active' },
+        { id: 'questions', text: 'Crafting questions...', status: 'pending' },
+    ]);
+
+    try {
+        const familiarityToggle = document.getElementById('rec-familiarity-toggle');
+        const data = await apiCall('/recommend/questions', {
+            method: 'POST',
+            body: JSON.stringify({
+                prompt: state.rec.prompt,
+                mode: state.rec.mode,
+                genres: (state.availableGenres.length > 0 && state.rec.selectedGenres.length === state.availableGenres.length) ? [] : state.rec.selectedGenres,
+                decades: (state.availableDecades.length > 0 && state.rec.selectedDecades.length === state.availableDecades.length) ? [] : state.rec.selectedDecades,
+                familiarity_enabled: familiarityToggle?.checked || false,
+            }),
+        });
+
+        state.rec.questions = data.questions;
+        state.rec.sessionId = data.session_id;
+        state.rec.answers = data.questions.map(() => null);
+        state.rec.answerTexts = data.questions.map(() => '');
+
+        hideRecLoading();
+        renderRecQuestions();
+        setRecStep('questions');
+    } catch (e) {
+        hideRecLoading();
+        showError(e.message);
+    } finally {
+        state.rec.loading = false;
+    }
+}
+
+function renderRecQuestions() {
+    const container = document.getElementById('rec-questions-container');
+    if (!container) return;
+
+    container.innerHTML = state.rec.questions.map((q, qi) => `
+        <div class="rec-question-card" data-question-index="${qi}">
+            <p class="rec-question-text">${escapeHtml(q.question_text)}</p>
+            <div class="rec-question-options">
+                ${q.options.map((opt, oi) => `
+                    <button class="rec-option-pill ${state.rec.answers[qi] === opt ? 'selected' : ''}"
+                            data-question="${qi}" data-option="${oi}">
+                        ${escapeHtml(opt)}
+                    </button>
+                `).join('')}
+            </div>
+            <input type="text" class="rec-question-freetext" placeholder="Add your own detail (optional)"
+                   data-question="${qi}" value="${escapeHtml(state.rec.answerTexts[qi] || '')}">
+            <button class="rec-question-skip" data-question="${qi}">Skip this question</button>
+        </div>
+    `).join('');
+}
+
+async function handleRecGenerate() {
+    state.rec.loading = true;
+
+    const progressSteps = [
+        { id: 'selecting', text: 'Choosing albums from your library...', status: 'active' },
+        { id: 'researching_primary', text: 'Researching an album...', status: 'pending' },
+        { id: 'researching_secondary', text: 'Looking up additional picks...', status: 'pending' },
+        { id: 'extracting_facts', text: 'Analyzing research sources...', status: 'pending' },
+        { id: 'writing', text: 'Writing the pitch...', status: 'pending' },
+        { id: 'validating', text: 'Fact-checking the pitch...', status: 'pending' },
+    ];
+    showRecLoading(progressSteps);
+
+    try {
+        const response = await fetch('/api/recommend/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_id: state.rec.sessionId,
+                answers: state.rec.answers,
+                answer_texts: state.rec.answerTexts,
+            }),
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({ detail: 'Request failed' }));
+            throw new Error(err.detail || err.error || 'Generation failed');
+        }
+
+        // Read SSE stream
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            let currentEventType = '';
+            let currentData = '';
+            for (const line of lines) {
+                if (line.startsWith('event: ')) {
+                    currentEventType = line.slice(7).trim();
+                    continue;
+                }
+                if (line.startsWith('data: ')) {
+                    currentData += line.slice(6);
+                    continue;
+                }
+                if (line === '' && currentData) {
+                    try {
+                        const data = JSON.parse(currentData);
+                        if (currentEventType === 'error' && data.error) {
+                            throw new Error(data.error);
+                        }
+                        if (data.step) {
+                            updateRecProgress(data.step);
+                        }
+                        if (data.recommendations) {
+                            state.rec.recommendations = data.recommendations;
+                            state.rec.tokenCount = data.token_count || 0;
+                            state.rec.estimatedCost = data.estimated_cost || 0;
+                            state.rec.researchWarning = data.research_warning;
+                        }
+                    } catch (parseErr) {
+                        if (parseErr.message && !parseErr.message.startsWith('Unexpected')) {
+                            throw parseErr; // Re-throw application errors (from error event)
+                        }
+                        console.warn('SSE parse error:', parseErr);
+                    }
+                    currentData = '';
+                    currentEventType = '';
+                }
+            }
+        }
+
+        hideRecLoading();
+        renderRecResults();
+        setRecStep('results');
+    } catch (e) {
+        hideRecLoading();
+        showError(e.message);
+    } finally {
+        state.rec.loading = false;
+    }
+}
+
+function showRecLoading(steps) {
+    const overlay = document.getElementById('rec-loading-overlay');
+    const list = document.getElementById('rec-progress-list');
+    if (!overlay || !list) return;
+
+    list.innerHTML = steps.map(s => `
+        <div class="rec-progress-item ${s.status}" data-progress-id="${s.id}">
+            <div class="rec-progress-icon">
+                ${s.status === 'completed' ? '<span style="color:var(--success)">&#10003;</span>' :
+                  s.status === 'active' ? '<div class="rec-progress-spinner"></div>' :
+                  '<span style="color:var(--text-muted)">&#9675;</span>'}
+            </div>
+            <span class="rec-progress-text">${escapeHtml(s.text)}</span>
+        </div>
+    `).join('');
+
+    overlay.classList.remove('hidden');
+}
+
+function updateRecProgress(activeStep) {
+    const items = document.querySelectorAll('.rec-progress-item');
+    let foundActive = false;
+    items.forEach(item => {
+        const id = item.dataset.progressId;
+        if (id === activeStep) {
+            foundActive = true;
+            item.className = 'rec-progress-item active';
+            item.querySelector('.rec-progress-icon').innerHTML = '<div class="rec-progress-spinner"></div>';
+        } else if (!foundActive) {
+            item.className = 'rec-progress-item completed';
+            item.querySelector('.rec-progress-icon').innerHTML = '<span style="color:var(--success)">&#10003;</span>';
+        }
+    });
+}
+
+function hideRecLoading() {
+    const overlay = document.getElementById('rec-loading-overlay');
+    if (overlay) overlay.classList.add('hidden');
+}
+
+function renderRecResults() {
+    const primary = state.rec.recommendations.find(r => r.rank === 'primary');
+    const secondaries = state.rec.recommendations.filter(r => r.rank === 'secondary');
+
+    // Research warning
+    const warningEl = document.getElementById('rec-research-warning');
+    if (warningEl && state.rec.researchWarning) {
+        warningEl.textContent = state.rec.researchWarning;
+        warningEl.classList.remove('hidden');
+    } else if (warningEl) {
+        warningEl.classList.add('hidden');
+    }
+
+    // Primary recommendation
+    const primaryContainer = document.getElementById('rec-primary-result');
+    if (primaryContainer && primary) {
+        const artHtml = primary.art_url
+            ? `<img class="rec-primary-art" src="${escapeHtml(primary.art_url)}" alt="${escapeHtml(primary.album)}"
+                    data-artist="${escapeHtml(primary.artist)}"
+                    onerror="this.outerHTML=artPlaceholderHtml(this.dataset.artist, true)">`
+            : artPlaceholderHtml(primary.artist, true).replace('art-placeholder', 'art-placeholder rec-primary-art');
+
+        const pitch = primary.pitch || {};
+        primaryContainer.innerHTML = `
+            <div class="rec-primary-layout">
+                <div>${artHtml}</div>
+                <div class="rec-primary-pitch">
+                    <div class="rec-pitch-album-title">${escapeHtml(primary.album)}</div>
+                    <div class="rec-pitch-artist">${escapeHtml(primary.artist)}${primary.year ? ` (${primary.year})` : ''}</div>
+                    ${pitch.hook ? `<div class="rec-pitch-hook">${escapeHtml(pitch.hook)}</div>` : ''}
+                    ${pitch.context ? `
+                        <div class="rec-pitch-section">
+                            <div class="rec-pitch-section-label">The Story</div>
+                            ${escapeHtml(pitch.context)}
+                        </div>` : ''}
+                    ${pitch.listening_guide ? `
+                        <div class="rec-pitch-section">
+                            <div class="rec-pitch-section-label">How to Listen</div>
+                            ${escapeHtml(pitch.listening_guide)}
+                        </div>` : ''}
+                    ${pitch.connection ? `
+                        <div class="rec-pitch-section">
+                            <div class="rec-pitch-section-label">Why This Album</div>
+                            ${escapeHtml(pitch.connection)}
+                        </div>` : ''}
+                    <div class="rec-primary-actions">
+                        ${primary.track_rating_keys?.length ? `
+                            <button class="btn btn-primary btn-sm rec-play-btn" data-rating-keys="${primary.track_rating_keys.join(',')}">&#9654; Play Now</button>
+                            <button class="btn btn-secondary btn-sm rec-save-btn" data-album="${escapeHtml(primary.album)}" data-artist="${escapeHtml(primary.artist)}" data-rating-keys="${primary.track_rating_keys.join(',')}" data-pitch="${escapeHtml(pitch.full_text || '')}">Save to Playlist</button>
+                            <div class="rec-actions-divider"></div>
+                        ` : ''}
+                        <button class="rec-action-link" id="rec-show-another">Show me another</button>
+                        <button class="rec-action-link" id="rec-start-over">Start over</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    // Secondary recommendations
+    const secondaryContainer = document.getElementById('rec-secondary-cards');
+    if (secondaryContainer) {
+        secondaryContainer.innerHTML = secondaries.map(rec => {
+            const artHtml = rec.art_url
+                ? `<img class="rec-secondary-art" src="${escapeHtml(rec.art_url)}" alt="${escapeHtml(rec.album)}"
+                        data-artist="${escapeHtml(rec.artist)}"
+                        onerror="this.outerHTML=artPlaceholderHtml(this.dataset.artist)">`
+                : artPlaceholderHtml(rec.artist).replace('art-placeholder', 'art-placeholder rec-secondary-art');
+
+            return `
+                <div class="rec-secondary-card">
+                    ${artHtml}
+                    <div class="rec-secondary-info">
+                        <div class="rec-secondary-title">${escapeHtml(rec.album)}</div>
+                        <div class="rec-secondary-artist">${escapeHtml(rec.artist)}${rec.year ? ` (${rec.year})` : ''}</div>
+                        <div class="rec-secondary-pitch">${escapeHtml(rec.pitch?.short_pitch || rec.pitch?.full_text || '')}</div>
+                        ${rec.track_rating_keys?.length ? `
+                            <div class="rec-secondary-actions">
+                                <button class="btn btn-secondary btn-sm rec-play-btn" data-rating-keys="${rec.track_rating_keys.join(',')}">&#9654; Play</button>
+                                <button class="btn btn-secondary btn-sm rec-save-btn" data-album="${escapeHtml(rec.album)}" data-artist="${escapeHtml(rec.artist)}" data-rating-keys="${rec.track_rating_keys.join(',')}" data-pitch="${escapeHtml(rec.pitch?.full_text || '')}">Save</button>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // Discovery bridge (show in library mode only)
+    const bridgeEl = document.getElementById('rec-discovery-bridge');
+    if (bridgeEl) {
+        bridgeEl.classList.toggle('hidden', state.rec.mode !== 'library');
+    }
+
+    // Cost footer
+    const costFooter = document.getElementById('rec-cost-footer');
+    if (costFooter) {
+        if (state.rec.estimatedCost > 0) {
+            costFooter.textContent = `${state.rec.tokenCount.toLocaleString()} tokens · $${state.rec.estimatedCost.toFixed(4)}`;
+        } else if (state.rec.tokenCount > 0) {
+            costFooter.textContent = `${state.rec.tokenCount.toLocaleString()} tokens · Free (local)`;
+        } else {
+            costFooter.textContent = '';
+        }
+    }
+}
+
+function resetRecState() {
+    state.rec.step = 'setup';
+    state.rec.prompt = '';
+    state.rec.questions = [];
+    state.rec.answers = [];
+    state.rec.answerTexts = [];
+    state.rec.sessionId = null;
+    state.rec.recommendations = [];
+    state.rec.tokenCount = 0;
+    state.rec.estimatedCost = 0;
+    state.rec.researchWarning = null;
+    // Preserve mode and filter selections
+    updateRecStep();
+}
+
+function setupRecEventListeners() {
+    // Familiarity toggle — restore from localStorage
+    const familiarityToggle = document.getElementById('rec-familiarity-toggle');
+    if (familiarityToggle) {
+        try {
+            familiarityToggle.checked = localStorage.getItem('mediasage-familiarity') === 'true';
+        } catch (e) { /* private browsing */ }
+        familiarityToggle.addEventListener('change', () => {
+            try { localStorage.setItem('mediasage-familiarity', familiarityToggle.checked); } catch (e) { /* private browsing */ }
+        });
+    }
+
+    // Mode buttons
+    document.querySelectorAll('.rec-mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            state.rec.mode = btn.dataset.recMode;
+            document.querySelectorAll('.rec-mode-btn').forEach(b => {
+                b.classList.toggle('active', b === btn);
+                b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+            });
+            updateRecAlbumPreview();
+        });
+    });
+
+    // Setup Next
+    const setupNext = document.getElementById('rec-setup-next');
+    if (setupNext) {
+        setupNext.addEventListener('click', () => setRecStep('prompt'));
+    }
+
+    // Prompt pills
+    const pillContainer = document.getElementById('rec-prompt-pills');
+    if (pillContainer) {
+        pillContainer.addEventListener('click', e => {
+            const pill = e.target.closest('.rec-prompt-pill');
+            if (!pill) return;
+            document.getElementById('rec-prompt-input').value = pill.textContent.trim();
+            state.rec.prompt = pill.textContent.trim();
+        });
+    }
+
+    // Prompt Next
+    const promptNext = document.getElementById('rec-prompt-next');
+    if (promptNext) {
+        promptNext.addEventListener('click', () => {
+            state.rec.prompt = document.getElementById('rec-prompt-input')?.value || '';
+            handleRecQuestions();
+        });
+    }
+
+    // Questions - event delegation
+    const questionsContainer = document.getElementById('rec-questions-container');
+    if (questionsContainer) {
+        questionsContainer.addEventListener('click', e => {
+            // Option pill clicked
+            const pill = e.target.closest('.rec-option-pill');
+            if (pill) {
+                const qi = parseInt(pill.dataset.question);
+                const oi = parseInt(pill.dataset.option);
+                const option = state.rec.questions[qi]?.options[oi];
+                // Toggle selection
+                if (state.rec.answers[qi] === option) {
+                    state.rec.answers[qi] = null;
+                } else {
+                    state.rec.answers[qi] = option;
+                }
+                renderRecQuestions();
+                return;
+            }
+            // Skip clicked
+            const skip = e.target.closest('.rec-question-skip');
+            if (skip) {
+                const qi = parseInt(skip.dataset.question);
+                state.rec.answers[qi] = null;
+                state.rec.answerTexts[qi] = '';
+                renderRecQuestions();
+            }
+        });
+
+        questionsContainer.addEventListener('input', e => {
+            if (e.target.classList.contains('rec-question-freetext')) {
+                const qi = parseInt(e.target.dataset.question);
+                state.rec.answerTexts[qi] = e.target.value;
+            }
+        });
+    }
+
+    // Get Recommendation
+    const getRecBtn = document.getElementById('rec-get-recommendation');
+    if (getRecBtn) {
+        getRecBtn.addEventListener('click', handleRecGenerate);
+    }
+
+    // Recommend filter chips - event delegation
+    const recGenreChips = document.getElementById('rec-genre-chips');
+    if (recGenreChips) {
+        recGenreChips.addEventListener('click', e => {
+            const chip = e.target.closest('.chip');
+            if (!chip) return;
+            const genre = chip.dataset.genre;
+            if (state.rec.selectedGenres.includes(genre)) {
+                state.rec.selectedGenres = state.rec.selectedGenres.filter(g => g !== genre);
+            } else {
+                state.rec.selectedGenres.push(genre);
+            }
+            renderRecFilterChips();
+            updateRecAlbumPreview();
+        });
+    }
+
+    const recDecadeChips = document.getElementById('rec-decade-chips');
+    if (recDecadeChips) {
+        recDecadeChips.addEventListener('click', e => {
+            const chip = e.target.closest('.chip');
+            if (!chip) return;
+            const decade = chip.dataset.decade;
+            if (state.rec.selectedDecades.includes(decade)) {
+                state.rec.selectedDecades = state.rec.selectedDecades.filter(d => d !== decade);
+            } else {
+                state.rec.selectedDecades.push(decade);
+            }
+            renderRecFilterChips();
+            updateRecAlbumPreview();
+        });
+    }
+
+    // Genre/decade toggle all
+    const recGenreToggle = document.getElementById('rec-genre-toggle-all');
+    if (recGenreToggle) {
+        recGenreToggle.addEventListener('click', () => {
+            const allSelected = state.availableGenres.length > 0 &&
+                state.rec.selectedGenres.length === state.availableGenres.length;
+            state.rec.selectedGenres = allSelected ? [] : state.availableGenres.map(g => g.name);
+            renderRecFilterChips();
+            updateRecAlbumPreview();
+        });
+    }
+
+    const recDecadeToggle = document.getElementById('rec-decade-toggle-all');
+    if (recDecadeToggle) {
+        recDecadeToggle.addEventListener('click', () => {
+            const allSelected = state.availableDecades.length > 0 &&
+                state.rec.selectedDecades.length === state.availableDecades.length;
+            state.rec.selectedDecades = allSelected ? [] : state.availableDecades.map(d => d.name);
+            renderRecFilterChips();
+            updateRecAlbumPreview();
+        });
+    }
+
+    // Step progress bar navigation (click completed steps to go back)
+    document.querySelectorAll('.rec-step').forEach(stepEl => {
+        stepEl.addEventListener('click', () => {
+            if (stepEl.classList.contains('completed')) {
+                setRecStep(stepEl.dataset.recStep);
+            }
+        });
+    });
+
+    // Results actions - event delegation
+    document.getElementById('rec-primary-result')?.addEventListener('click', e => {
+        handleRecResultAction(e);
+    });
+    document.getElementById('rec-secondary-cards')?.addEventListener('click', e => {
+        handleRecResultAction(e);
+    });
+
+    // Show me another
+    document.addEventListener('click', e => {
+        if (e.target.id === 'rec-show-another') {
+            handleRecGenerate();
+        }
+        if (e.target.id === 'rec-start-over') {
+            resetRecState();
+        }
+        if (e.target.id === 'rec-try-discovery') {
+            state.rec.mode = 'discovery';
+            document.querySelectorAll('.rec-mode-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.recMode === 'discovery');
+                b.setAttribute('aria-pressed', b.dataset.recMode === 'discovery' ? 'true' : 'false');
+            });
+            handleRecQuestions();
+        }
+    });
+}
+
+function handleRecResultAction(e) {
+    const playBtn = e.target.closest('.rec-play-btn');
+    if (playBtn) {
+        const keys = playBtn.dataset.ratingKeys.split(',');
+        // Store rating keys for the play queue flow, then open client picker
+        state._pendingRatingKeys = keys;
+        const modal = document.getElementById('client-picker-modal');
+        modal.classList.remove('hidden');
+        lockScroll();
+        focusManager.openModal(modal);
+        refreshClientList();
+        return;
+    }
+
+    const saveBtn = e.target.closest('.rec-save-btn');
+    if (saveBtn) {
+        const album = saveBtn.dataset.album;
+        const artist = saveBtn.dataset.artist;
+        const keys = saveBtn.dataset.ratingKeys.split(',');
+        const pitch = saveBtn.dataset.pitch;
+        handleRecSaveToPlaylist(album, artist, keys, pitch);
+    }
+}
+
+async function handleRecSaveToPlaylist(album, artist, ratingKeys, pitch) {
+    try {
+        const response = await apiCall('/playlist', {
+            method: 'POST',
+            body: JSON.stringify({
+                name: `Recommended: ${album} - ${artist}`,
+                rating_keys: ratingKeys,
+                description: pitch,
+            }),
+        });
+        if (response.success) {
+            showSuccess(`Saved "${album}" to playlist`);
+        } else {
+            showError(response.error || 'Failed to save playlist');
+        }
+    } catch (e) {
+        showError(e.message);
+    }
+}
+
+// =============================================================================
 // Initialization
 // =============================================================================
 
@@ -3141,6 +4040,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }).observe(document.body, { childList: true, subtree: true });
 
     setupEventListeners();
+    setupRecEventListeners();
     state.view = viewFromHash();
     if (!location.hash) {
         history.replaceState(null, '', '#' + VIEW_TO_HASH[state.view]);
@@ -3160,6 +4060,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (error) {
         // Settings will show as not configured
         console.error('Initialization error:', error);
+    }
+
+    // Initialize recommend view AFTER config is loaded (needs plex_connected)
+    if (state.view === 'recommend') {
+        initRecommendView();
     }
 
     // Restore save mode from localStorage AFTER config loads (US3 — T017)
