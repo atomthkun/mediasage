@@ -631,6 +631,31 @@ textarea {
     margin-bottom: var(--spacing-sm);
 }
 
+.filter-section-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-sm);
+}
+
+.filter-section-header h3 {
+    margin-bottom: 0;
+}
+
+.filter-toggle-all {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    padding: 0;
+    transition: color var(--transition-fast);
+}
+
+.filter-toggle-all:hover {
+    color: var(--accent-hover);
+}
+
 /* Checkbox */
 .checkbox-label {
     display: flex;
@@ -2185,6 +2210,12 @@ body.no-scroll {
         min-height: 44px;
         padding-left: var(--spacing-md);
         padding-right: var(--spacing-md);
+    }
+
+    .filter-toggle-all {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
     }
 
     .count-btn,

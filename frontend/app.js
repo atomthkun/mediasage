@@ -131,6 +131,20 @@ const state = {
 };
 
 // =============================================================================
+// Filter Helpers
+// =============================================================================
+
+function allGenresSelected() {
+    return state.availableGenres.length > 0 &&
+        state.selectedGenres.length === state.availableGenres.length;
+}
+
+function allDecadesSelected() {
+    return state.availableDecades.length > 0 &&
+        state.selectedDecades.length === state.availableDecades.length;
+}
+
+// =============================================================================
 // API Calls
 // =============================================================================
 
@@ -750,6 +764,15 @@ function updateFilters() {
         </button>
     `}).join('');
 
+    // Sync genre toggle label
+    const genreToggle = document.getElementById('genre-toggle-all');
+    if (genreToggle) {
+        const allSelected = allGenresSelected();
+        genreToggle.textContent = allSelected ? 'Deselect All' : 'Select All';
+        genreToggle.setAttribute('aria-label',
+            allSelected ? 'Deselect all genres' : 'Select all genres');
+    }
+
     // Update decade chips
     const decadeContainer = document.getElementById('decade-chips');
     decadeContainer.innerHTML = state.availableDecades.map(decade => {
@@ -762,6 +785,15 @@ function updateFilters() {
             ${decade.count != null ? `<span class="chip-count">${decade.count}</span>` : ''}
         </button>
     `}).join('');
+
+    // Sync decade toggle label
+    const decadeToggle = document.getElementById('decade-toggle-all');
+    if (decadeToggle) {
+        const allSelected = allDecadesSelected();
+        decadeToggle.textContent = allSelected ? 'Deselect All' : 'Select All';
+        decadeToggle.setAttribute('aria-label',
+            allSelected ? 'Deselect all decades' : 'Select all decades');
+    }
 
     // Restore focus to the chip that was active before re-render
     if (focusedGenre) {
@@ -897,9 +929,10 @@ async function updateFilterPreview() {
     }, 150);
 
     try {
+        // All selected = no filter (avoids excluding untagged tracks)
         const requestBody = {
-            genres: state.selectedGenres,
-            decades: state.selectedDecades,
+            genres: allGenresSelected() ? [] : state.selectedGenres,
+            decades: allDecadesSelected() ? [] : state.selectedDecades,
             track_count: state.trackCount,
             max_tracks_to_ai: state.maxTracksToAI,
             min_rating: state.minRating,
@@ -1998,6 +2031,13 @@ function setupEventListeners() {
     // Continue to filters
     document.getElementById('continue-to-filters-btn').addEventListener('click', handleContinueToFilters);
 
+    // Genre toggle all
+    document.getElementById('genre-toggle-all').addEventListener('click', () => {
+        state.selectedGenres = allGenresSelected() ? [] : state.availableGenres.map(g => g.name);
+        updateFilters();
+        updateFilterPreview();
+    });
+
     // Genre chips
     document.getElementById('genre-chips').addEventListener('click', e => {
         const chip = e.target.closest('.chip');
@@ -2009,6 +2049,13 @@ function setupEventListeners() {
         } else {
             state.selectedGenres.push(genre);
         }
+        updateFilters();
+        updateFilterPreview();
+    });
+
+    // Decade toggle all
+    document.getElementById('decade-toggle-all').addEventListener('click', () => {
+        state.selectedDecades = allDecadesSelected() ? [] : state.availableDecades.map(d => d.name);
         updateFilters();
         updateFilterPreview();
     });
@@ -2427,8 +2474,8 @@ async function handleContinueToFilters() {
         const stats = await fetchLibraryStats();
         state.availableGenres = stats.genres;
         state.availableDecades = stats.decades;
-        state.selectedGenres = [];
-        state.selectedDecades = [];
+        state.selectedGenres = stats.genres.map(g => g.name);
+        state.selectedDecades = stats.decades.map(d => d.name);
 
         state.step = 'filters';
         updateStep();
@@ -2442,9 +2489,10 @@ async function handleContinueToFilters() {
 }
 
 async function handleGenerate() {
+    // All selected = no filter (avoids excluding untagged tracks)
     const request = {
-        genres: state.selectedGenres,
-        decades: state.selectedDecades,
+        genres: allGenresSelected() ? [] : state.selectedGenres,
+        decades: allDecadesSelected() ? [] : state.selectedDecades,
         track_count: state.trackCount,
         exclude_live: state.excludeLive,
         min_rating: state.minRating,
