@@ -38,6 +38,7 @@ initial-spec.md
 README.md
 CLAUDE.md
 .specify/
+frontend/preview-*.html
 
 # Docker
 Dockerfile*
