@@ -398,11 +398,13 @@ class RecommendationPipeline:
         session_id: str,
         research: dict[str, ResearchData] | None = None,
         familiarity: dict[str, str] | None = None,
+        extracted_facts: dict[str, ExtractedFacts] | None = None,
     ) -> list[AlbumRecommendation]:
         """Write sommelier pitches for each recommendation.
 
         Args:
             familiarity: Optional dict mapping rating_key -> "unplayed"|"light"|"well-loved"
+            extracted_facts: Optional dict mapping "artist|||album" -> ExtractedFacts
 
         Returns the same recommendations with pitches filled in.
         """
@@ -414,19 +416,40 @@ class RecommendationPipeline:
             if familiarity and rec.rating_key and rec.rating_key in familiarity:
                 level = familiarity[rec.rating_key]
                 desc += f"\nFamiliarity: {level}"
-            # Add research data if available
+
+            # Add extracted facts if available (preferred over raw research)
+            facts_key = f"{rec.artist}|||{rec.album}"
+            if extracted_facts and facts_key in extracted_facts:
+                ef = extracted_facts[facts_key]
+                desc += "\n\nEXTRACTED FACTS (from Wikipedia, MusicBrainz, and reviews):"
+                if ef.origin_story:
+                    desc += f"\n- Origin: {ef.origin_story}"
+                if ef.personnel:
+                    desc += f"\n- Personnel: {', '.join(ef.personnel)}"
+                if ef.musical_style:
+                    desc += f"\n- Musical style: {ef.musical_style}"
+                if ef.vocal_approach:
+                    desc += f"\n- Vocal approach: {ef.vocal_approach}"
+                if ef.cultural_context:
+                    desc += f"\n- Cultural context: {ef.cultural_context}"
+                if ef.track_highlights:
+                    desc += f"\n- Track highlights: {ef.track_highlights}"
+                if ef.common_misconceptions:
+                    desc += f"\n- Common misconceptions: {ef.common_misconceptions}"
+                if ef.source_coverage:
+                    desc += f"\n- Source coverage: {ef.source_coverage}"
+
+            # Add track listing from research if available
             research_key = f"{rec.artist}|||{rec.album}"
             if research and research_key in research:
                 rd = research[research_key]
-                if rd.wikipedia_summary:
-                    desc += f"\nResearch: {rd.wikipedia_summary[:500]}"
+                if rd.track_listing:
+                    desc += f"\n\nTRACK LISTING: {', '.join(rd.track_listing)}"
                 if rd.label:
                     desc += f"\nLabel: {rd.label}"
                 if rd.release_date:
                     desc += f"\nRelease: {rd.release_date}"
-                if rd.credits:
-                    creds = ", ".join(f"{role}: {name}" for role, name in list(rd.credits.items())[:3])
-                    desc += f"\nCredits: {creds}"
+
             album_descs.append(desc)
 
         albums_text = "\n\n".join(album_descs)
@@ -453,6 +476,24 @@ class RecommendationPipeline:
                 "offer a fresh angle or new way to appreciate it\n"
             )
 
+        grounding_rules = ""
+        if extracted_facts:
+            grounding_rules = (
+                "\n\nGROUNDING RULES (mandatory when EXTRACTED FACTS are provided):\n"
+                "- Base all factual claims on the EXTRACTED FACTS provided for each album. "
+                "Do not rely on general knowledge about the artist when it conflicts with "
+                "album-specific facts.\n"
+                "- If a fact is marked \"NOT IN SOURCES,\" do not make claims about that topic. "
+                "Write around it or keep the language vague and subjective.\n"
+                "- Never generalize from an artist's broader catalog to this specific album. "
+                "What is true of an artist in general may not be true of this particular record.\n"
+                "- Distinguish between the album's actual story and a plausible-sounding narrative. "
+                "If the origin field describes specific events, use those — do not invent "
+                "a more dramatic or simplified version.\n"
+                "- Pay close attention to the 'Common misconceptions' field — these are facts "
+                "that are easily gotten wrong.\n"
+            )
+
         system = (
             "You are a passionate music sommelier. Write compelling pitches for album recommendations.\n\n"
             "For the PRIMARY album, write:\n"
@@ -463,7 +504,7 @@ class RecommendationPipeline:
             "For each SECONDARY album, write:\n"
             "- short_pitch: 2-3 vivid sentences that sell the album\n\n"
             "Use specific, vivid language. Reference the user's words. Avoid generic music-critic clichés.\n"
-            "If research data is provided, ground your pitch in real facts.\n"
+            f"{grounding_rules}"
             f"{familiarity_guidance}\n"
             "Return JSON array of objects with: artist, album, hook, context, listening_guide, connection "
             "(for primary), or short_pitch (for secondary). Include all applicable fields.\n"

@@ -320,3 +320,119 @@ class TestFactExtraction:
         )
 
         assert isinstance(facts, ExtractedFacts)
+
+
+class TestWritePitchesGrounding:
+    """Test that write_pitches uses structured facts and grounding rules."""
+
+    def test_write_pitches_uses_extracted_facts(self):
+        """write_pitches should include ExtractedFacts in the prompt, not raw Wikipedia."""
+        from backend.recommender import RecommendationPipeline
+        from backend.models import (
+            AlbumRecommendation,
+            ExtractedFacts,
+            ResearchData,
+        )
+
+        mock_llm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.input_tokens = 200
+        mock_response.output_tokens = 300
+        mock_response.model = "test-model"
+        mock_response.estimated_cost.return_value = 0.01
+        mock_llm.analyze.return_value = mock_response
+        mock_llm.parse_json_response.return_value = [
+            {
+                "artist": "Sigur Ros",
+                "album": "Agaetis byrjun",
+                "hook": "A test hook",
+                "context": "A test context",
+                "listening_guide": "A test guide",
+                "connection": "A test connection",
+            },
+        ]
+
+        pipeline = RecommendationPipeline(config=MagicMock(), llm_client=mock_llm)
+
+        recs = [
+            AlbumRecommendation(
+                rank="primary",
+                album="Agaetis byrjun",
+                artist="Sigur Ros",
+                year=1999,
+                rating_key="123",
+                track_rating_keys=["456"],
+            ),
+        ]
+
+        facts = {
+            "Sigur Ros|||Agaetis byrjun": ExtractedFacts(
+                origin_story="Recorded in a Reykjavik swimming pool",
+                vocal_approach="Mostly Icelandic; Vonlenska on 2 tracks only",
+                common_misconceptions="Not entirely in Vonlenska despite common belief",
+            ),
+        }
+
+        research = {
+            "Sigur Ros|||Agaetis byrjun": ResearchData(
+                track_listing=["Intro", "Svefn-g-englar", "Staralfur"],
+            ),
+        }
+
+        pipeline.write_pitches(
+            recommendations=recs,
+            prompt="something atmospheric",
+            answers=[None],
+            answer_texts=[],
+            session_id="test",
+            research=research,
+            extracted_facts=facts,
+        )
+
+        call_args = mock_llm.analyze.call_args
+        system_prompt = call_args[0][1]
+        user_prompt = call_args[0][0]
+
+        # Grounding rules should be in system prompt
+        assert "GROUNDING RULES" in system_prompt
+        assert "NOT IN SOURCES" in system_prompt
+
+        # Extracted facts should be in user prompt, not raw Wikipedia
+        assert "Vonlenska on 2 tracks only" in user_prompt
+        assert "common misconceptions" in user_prompt.lower()
+
+        # Track listing should be included
+        assert "Svefn-g-englar" in user_prompt
+
+    def test_write_pitches_no_500_char_truncation(self):
+        """write_pitches should NOT truncate Wikipedia to 500 chars (old behavior)."""
+        from backend.recommender import RecommendationPipeline
+        from backend.models import AlbumRecommendation, ResearchData
+
+        mock_llm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.input_tokens = 200
+        mock_response.output_tokens = 300
+        mock_response.model = "test-model"
+        mock_response.estimated_cost.return_value = 0.01
+        mock_llm.analyze.return_value = mock_response
+        mock_llm.parse_json_response.return_value = [
+            {"artist": "Test", "album": "Test", "hook": "", "context": "",
+             "listening_guide": "", "connection": ""},
+        ]
+
+        pipeline = RecommendationPipeline(config=MagicMock(), llm_client=mock_llm)
+
+        recs = [AlbumRecommendation(
+            rank="primary", album="Test", artist="Test",
+            rating_key="1", track_rating_keys=["2"],
+        )]
+
+        # No extracted_facts passed — should still work without [:500] truncation
+        pipeline.write_pitches(
+            recommendations=recs, prompt="test", answers=[],
+            answer_texts=[], session_id="test",
+        )
+
+        # Should not crash and should produce a pitch
+        assert recs[0].pitch.hook is not None
