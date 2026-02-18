@@ -560,6 +560,154 @@ class RecommendationPipeline:
 
         return recommendations
 
+    def validate_pitch(
+        self,
+        pitch: SommelierPitch,
+        facts: ExtractedFacts,
+        session_id: str,
+    ) -> PitchValidation:
+        """Validate a primary album pitch against extracted facts.
+
+        Uses the analysis (smart) model to fact-check claims.
+
+        Returns PitchValidation with any issues found.
+        """
+        facts_text = ""
+        if facts.origin_story:
+            facts_text += f"- Origin: {facts.origin_story}\n"
+        if facts.personnel:
+            facts_text += f"- Personnel: {', '.join(facts.personnel)}\n"
+        if facts.musical_style:
+            facts_text += f"- Musical style: {facts.musical_style}\n"
+        if facts.vocal_approach:
+            facts_text += f"- Vocal approach: {facts.vocal_approach}\n"
+        if facts.cultural_context:
+            facts_text += f"- Cultural context: {facts.cultural_context}\n"
+        if facts.track_highlights:
+            facts_text += f"- Track highlights: {facts.track_highlights}\n"
+        if facts.common_misconceptions:
+            facts_text += f"- Common misconceptions: {facts.common_misconceptions}\n"
+
+        system = (
+            "You are a fact-checker reviewing an album recommendation pitch against "
+            "research data. Flag claims that:\n"
+            "1. Contradict the extracted facts\n"
+            "2. Are not supported by any source and could be wrong (specific biographical "
+            "events, specific recording details, specific personnel claims)\n"
+            "3. Overgeneralize from the artist's catalog to this specific album\n"
+            "4. Mischaracterize events (e.g., 'toured with' vs 'rehearsed with')\n\n"
+            "Do NOT flag:\n"
+            "- Subjective/editorial language (e.g., 'sonic warm bath', 'ethereal')\n"
+            "- Vague statements that don't make specific factual claims\n"
+            "- Opinions about how the album sounds or feels\n\n"
+            "Return a JSON object: {\"valid\": true} if no issues, or "
+            "{\"valid\": false, \"issues\": [{\"claim\": \"...\", \"problem\": \"...\", "
+            "\"correction\": \"...\"}]} if issues found.\n"
+            "No explanation, just the JSON object."
+        )
+
+        user_prompt = (
+            f"PITCH TO CHECK:\n{pitch.full_text}\n\n"
+            f"EXTRACTED FACTS:\n{facts_text}\n\n"
+            f"Are there any factual inaccuracies in the pitch?"
+        )
+
+        response = self.llm_client.analyze(user_prompt, system)
+        self._log_cost("pitch_validation", response, session_id)
+
+        raw = self.llm_client.parse_json_response(response)
+        issues = []
+        for issue_data in raw.get("issues", []):
+            issues.append(PitchIssue(
+                claim=issue_data.get("claim", ""),
+                problem=issue_data.get("problem", ""),
+                correction=issue_data.get("correction", ""),
+            ))
+
+        return PitchValidation(
+            valid=raw.get("valid", True),
+            issues=issues,
+        )
+
+    def rewrite_pitch(
+        self,
+        rec: AlbumRecommendation,
+        facts: ExtractedFacts,
+        validation: PitchValidation,
+        prompt: str,
+        answers_str: str,
+        session_id: str,
+    ) -> None:
+        """Rewrite a primary album pitch incorporating validation corrections.
+
+        Mutates rec.pitch in place with the corrected version.
+        """
+        # Build corrections block
+        corrections = []
+        for issue in validation.issues:
+            corrections.append(
+                f"- WRONG: \"{issue.claim}\" → RIGHT: \"{issue.correction}\""
+            )
+        corrections_text = "\n".join(corrections)
+
+        # Build facts block
+        facts_parts = []
+        for field_name, field_val in [
+            ("Origin", facts.origin_story),
+            ("Personnel", ", ".join(facts.personnel) if facts.personnel else ""),
+            ("Musical style", facts.musical_style),
+            ("Vocal approach", facts.vocal_approach),
+            ("Cultural context", facts.cultural_context),
+            ("Track highlights", facts.track_highlights),
+            ("Common misconceptions", facts.common_misconceptions),
+        ]:
+            if field_val:
+                facts_parts.append(f"- {field_name}: {field_val}")
+        facts_text = "\n".join(facts_parts)
+
+        system = (
+            "You are a passionate music sommelier. Rewrite this album pitch, fixing the "
+            "factual errors listed below. Keep the same tone, structure, and enthusiasm — "
+            "only change the parts that are factually wrong.\n\n"
+            "Write:\n"
+            "- hook: A compelling one-liner\n"
+            "- context: An interesting factual detail about the album\n"
+            "- listening_guide: How to approach the listen\n"
+            "- connection: Why this album matches the request\n\n"
+            "Return a JSON object with: hook, context, listening_guide, connection.\n"
+            "No explanation, just the JSON object."
+        )
+
+        user_prompt = (
+            f"Album: {rec.artist} — {rec.album} ({rec.year or '?'})\n"
+            f"User wanted: \"{prompt}\"\n"
+            f"Their preferences: {answers_str}\n\n"
+            f"CORRECTIONS (do not repeat these errors):\n{corrections_text}\n\n"
+            f"EXTRACTED FACTS:\n{facts_text}\n\n"
+            f"ORIGINAL PITCH:\n{rec.pitch.full_text}\n\n"
+            f"Rewrite the pitch fixing the errors above."
+        )
+
+        response = self.llm_client.analyze(user_prompt, system)
+        self._log_cost("pitch_rewrite", response, session_id)
+
+        item = self.llm_client.parse_json_response(response)
+
+        hook = item.get("hook", "")
+        context = item.get("context", "")
+        listening_guide = item.get("listening_guide", "")
+        connection = item.get("connection", "")
+        parts = [p for p in [hook, context, listening_guide, connection] if p]
+        full_text = "\n\n".join(parts)
+
+        rec.pitch = SommelierPitch(
+            hook=hook,
+            context=context,
+            listening_guide=listening_guide,
+            connection=connection,
+            full_text=full_text,
+        )
+
     # ── Discovery mode helpers ──────────────────────────────────────────
 
     def build_taste_profile(self, album_candidates: list[AlbumCandidate]) -> TasteProfile:

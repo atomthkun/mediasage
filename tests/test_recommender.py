@@ -436,3 +436,147 @@ class TestWritePitchesGrounding:
 
         # Should not crash and should produce a pitch
         assert recs[0].pitch.hook is not None
+
+
+class TestPitchValidation:
+    """Test pitch validation against research data."""
+
+    def test_validate_pitch_passes_clean_pitch(self):
+        """validate_pitch should return valid=True for a factually correct pitch."""
+        from backend.recommender import RecommendationPipeline
+        from backend.models import SommelierPitch
+
+        mock_llm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.input_tokens = 100
+        mock_response.output_tokens = 20
+        mock_response.model = "test-model"
+        mock_response.estimated_cost.return_value = 0.005
+        mock_llm.analyze.return_value = mock_response
+        mock_llm.parse_json_response.return_value = {"valid": True, "issues": []}
+
+        pipeline = RecommendationPipeline(config=MagicMock(), llm_client=mock_llm)
+
+        pitch = SommelierPitch(
+            hook="A good hook",
+            context="Recorded in Reykjavik",
+            listening_guide="Listen for the strings",
+            connection="Matches your request",
+            full_text="A good hook\n\nRecorded in Reykjavik",
+        )
+        facts = ExtractedFacts(
+            origin_story="Recorded in Reykjavik",
+            musical_style="Post-rock with orchestral elements",
+        )
+
+        result = pipeline.validate_pitch(
+            pitch=pitch, facts=facts, session_id="test",
+        )
+
+        assert result.valid is True
+        assert len(result.issues) == 0
+
+    def test_validate_pitch_catches_inaccuracy(self):
+        """validate_pitch should flag claims contradicting research."""
+        from backend.recommender import RecommendationPipeline
+        from backend.models import SommelierPitch
+
+        mock_llm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.input_tokens = 100
+        mock_response.output_tokens = 100
+        mock_response.model = "test-model"
+        mock_response.estimated_cost.return_value = 0.005
+        mock_llm.analyze.return_value = mock_response
+        mock_llm.parse_json_response.return_value = {
+            "valid": False,
+            "issues": [
+                {
+                    "claim": "touring stint with David Berman",
+                    "problem": "contradicts research",
+                    "correction": "Jenkins rehearsed with Purple Mountains but Berman died before the tour began",
+                }
+            ],
+        }
+
+        pipeline = RecommendationPipeline(config=MagicMock(), llm_client=mock_llm)
+
+        pitch = SommelierPitch(full_text="Born from her touring stint with David Berman...")
+        facts = ExtractedFacts(
+            origin_story="Jenkins rehearsed with Purple Mountains for four days before Berman died",
+        )
+
+        result = pipeline.validate_pitch(
+            pitch=pitch, facts=facts, session_id="test",
+        )
+
+        assert not result.valid
+        assert len(result.issues) == 1
+        assert "rehearsed" in result.issues[0].correction
+
+
+class TestPitchRewrite:
+    """Test pitch rewriting with corrections."""
+
+    def test_rewrite_pitch_incorporates_corrections(self):
+        """rewrite_pitch should pass corrections as constraints to the LLM."""
+        from backend.recommender import RecommendationPipeline
+        from backend.models import (
+            AlbumRecommendation,
+            PitchIssue,
+            PitchValidation,
+        )
+
+        mock_llm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.input_tokens = 200
+        mock_response.output_tokens = 300
+        mock_response.model = "test-model"
+        mock_response.estimated_cost.return_value = 0.01
+        mock_llm.analyze.return_value = mock_response
+        mock_llm.parse_json_response.return_value = {
+            "hook": "Corrected hook",
+            "context": "Jenkins rehearsed with the band before tragedy struck",
+            "listening_guide": "Guide",
+            "connection": "Connection",
+        }
+
+        pipeline = RecommendationPipeline(config=MagicMock(), llm_client=mock_llm)
+
+        rec = AlbumRecommendation(
+            rank="primary",
+            album="An Overview on Phenomenal Nature",
+            artist="Cassandra Jenkins",
+            year=2021,
+        )
+        facts = ExtractedFacts(
+            origin_story="Jenkins rehearsed with Purple Mountains for four days",
+        )
+        validation = PitchValidation(
+            valid=False,
+            issues=[
+                PitchIssue(
+                    claim="touring stint with David Berman",
+                    problem="contradicts research",
+                    correction="Rehearsed for four days, never toured",
+                ),
+            ],
+        )
+
+        pipeline.rewrite_pitch(
+            rec=rec,
+            facts=facts,
+            validation=validation,
+            prompt="something contemplative",
+            answers_str="calm; introspective",
+            session_id="test",
+        )
+
+        # Verify corrections were in the prompt
+        call_args = mock_llm.analyze.call_args
+        prompt = call_args[0][0]
+        assert "touring stint with David Berman" in prompt
+        assert "Rehearsed for four days" in prompt
+
+        # Verify pitch was updated
+        assert rec.pitch.hook == "Corrected hook"
