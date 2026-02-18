@@ -580,6 +580,7 @@ class ResearchData(BaseModel):
     review_links: list[str] = []
     review_texts: list[str] = []
     cover_art_url: str | None = None
+    earliest_release_mbid: str | None = None
 
 
 class ExtractedFacts(BaseModel):

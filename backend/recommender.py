@@ -407,10 +407,22 @@ class RecommendationPipeline:
             lookup_key = f"{artist.lower()}|||{album.lower()}"
             candidate = candidate_lookup.get(lookup_key)
 
+            # Fallback: substring match handles LLM dropping suffixes like "(Reissue)"
+            if candidate is None:
+                artist_l = artist.lower()
+                album_l = album.lower()
+                for ckey, cval in candidate_lookup.items():
+                    c_artist, c_album = ckey.split("|||", 1)
+                    if c_artist == artist_l and (
+                        album_l in c_album or c_album in album_l
+                    ):
+                        candidate = cval
+                        break
+
             rec = AlbumRecommendation(
                 rank=rank if rank in ("primary", "secondary") else "secondary",
-                album=album,
-                artist=artist,
+                album=candidate.album if candidate else album,
+                artist=candidate.album_artist if candidate else artist,
                 year=candidate.year if candidate else None,
                 rating_key=candidate.parent_rating_key if candidate else None,
                 track_rating_keys=candidate.track_rating_keys if candidate else [],
@@ -576,7 +588,23 @@ class RecommendationPipeline:
 
         for rec in recommendations:
             key = f"{rec.artist.lower()}|||{rec.album.lower()}"
-            item = pitch_lookup.get(key, {})
+            item = pitch_lookup.get(key)
+
+            # Fallback: LLMs often drop parenthetical suffixes like "(Reissue)"
+            # so try substring matching on album name when artist matches exactly
+            if item is None:
+                rec_artist_l = rec.artist.lower()
+                rec_album_l = rec.album.lower()
+                for pkey, pval in pitch_lookup.items():
+                    p_artist, p_album = pkey.split("|||", 1)
+                    if p_artist == rec_artist_l and (
+                        rec_album_l in p_album or p_album in rec_album_l
+                    ):
+                        item = pval
+                        break
+
+            if item is None:
+                item = {}
 
             if rec.rank == "primary":
                 hook = item.get("hook", "")

@@ -1042,7 +1042,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                         primary.research_available = True
                         _apply_year_override(primary, rd, _logging.getLogger(__name__))
 
-                        # Discovery mode: validate against research and fetch cover art
+                        # Discovery mode: validate against research
                         if is_discovery:
                             valid = await asyncio.to_thread(
                                 pipeline.validate_discovery_album,
@@ -1050,12 +1050,12 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                             )
                             if not valid:
                                 _logging.getLogger(__name__).info("Primary discovery album failed validation")
-                            # Fetch cover art for discovery mode
-                            rg_data = await research_client.lookup_release_group(rd.musicbrainz_id)
-                            if rg_data and rg_data.get("earliest_release_mbid"):
-                                art_url = await research_client.fetch_cover_art(rg_data["earliest_release_mbid"])
-                                if art_url:
-                                    primary.art_url = art_url
+
+                        # Fetch cover art when missing (discovery mode or failed candidate lookup)
+                        if not primary.art_url and rd.earliest_release_mbid:
+                            art_url = await research_client.fetch_cover_art(rd.earliest_release_mbid)
+                            if art_url:
+                                primary.art_url = art_url
                 except Exception as e:
                     _logging.getLogger(__name__).warning("Primary research failed: %s", e)
                     research_warning = "Research was unavailable for the primary album — factual details could not be verified and may be approximate."
@@ -1072,13 +1072,11 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                         sec.research_available = True
                         _apply_year_override(sec, rd, _logging.getLogger(__name__))
 
-                        # Fetch cover art for discovery mode secondaries
-                        if is_discovery:
-                            rg_data = await research_client.lookup_release_group(rd.musicbrainz_id)
-                            if rg_data and rg_data.get("earliest_release_mbid"):
-                                art_url = await research_client.fetch_cover_art(rg_data["earliest_release_mbid"])
-                                if art_url:
-                                    sec.art_url = art_url
+                        # Fetch cover art when missing (discovery mode or failed candidate lookup)
+                        if not sec.art_url and rd.earliest_release_mbid:
+                            art_url = await research_client.fetch_cover_art(rd.earliest_release_mbid)
+                            if art_url:
+                                sec.art_url = art_url
                 except Exception as e:
                     _logging.getLogger(__name__).warning("Secondary research failed for %s: %s", sec.album, e)
 

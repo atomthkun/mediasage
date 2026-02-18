@@ -448,6 +448,7 @@ class MusicResearchClient:
 
         # Step 3: Look up release for track listing, label, credits
         release_mbid = rg_data.get("earliest_release_mbid")
+        research.earliest_release_mbid = release_mbid
         if release_mbid:
             release_data = await self.lookup_release(release_mbid)
             if release_data:
