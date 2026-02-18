@@ -17,6 +17,7 @@
             <h1 class="logo">MediaSage</h1>
             <nav class="nav" role="navigation" aria-label="Main navigation">
                 <button class="nav-btn active" data-view="create" aria-current="true">Make a Playlist</button>
+                <button class="nav-btn" data-view="recommend" aria-current="false">Recommend Album</button>
                 <button class="nav-btn nav-btn--icon" data-view="settings" aria-current="false" aria-label="Settings"><svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
             </nav>
         </header>
@@ -302,62 +303,6 @@
                     </div>
                 </div>
 
-                <!-- Client Picker Modal -->
-                <div id="client-picker-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="client-picker-title">
-                    <div class="modal-card">
-                        <button class="modal-close" onclick="dismissClientPicker()" aria-label="Close">&times;</button>
-                        <h2 id="client-picker-title">Select a Device</h2>
-                        <p id="client-picker-hint" class="client-picker-hint hidden">
-                            <span class="hint-group"><span class="client-hint-dot playing"></span> Playing</span>
-                            <span class="hint-group"><span class="client-hint-dot"></span> Idle</span>
-                            <span class="hint-group"><span class="client-hint-dot mobile"></span> Needs active session</span>
-                        </p>
-                        <div id="client-list" class="client-list" role="listbox" aria-label="Available devices"></div>
-                        <div id="client-empty-state" class="client-empty-state hidden">
-                            <p>No Plex clients active. Open Plexamp or Plex first.</p>
-                            <button id="refresh-clients-btn" class="btn btn-secondary">Refresh</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Play Mode Choice Modal -->
-                <div id="play-choice-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="play-choice-title">
-                    <div class="modal-card">
-                        <button class="modal-close" onclick="dismissPlayChoice()" aria-label="Close">&times;</button>
-                        <h2 id="play-choice-title">Device is currently playing</h2>
-                        <p class="play-choice-description">What would you like to do?</p>
-                        <div class="play-choice-buttons">
-                            <button id="replace-queue-btn" class="btn btn-primary play-choice-btn">Replace Queue</button>
-                            <button id="play-next-btn" class="btn btn-secondary play-choice-btn">Play Next</button>
-                        </div>
-                        <button class="btn-link modal-cancel" onclick="dismissPlayChoice()">Cancel</button>
-                    </div>
-                </div>
-
-                <!-- Play Now Success Modal -->
-                <div id="play-success-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="play-success-title">
-                    <div class="modal-card modal-card--success">
-                        <button class="modal-close" onclick="dismissPlaySuccess()" aria-label="Close">&times;</button>
-                        <div class="success-hero">
-                            <div class="success-ring" aria-hidden="true">
-                                <svg class="success-ring-svg" viewBox="0 0 48 48" fill="none">
-                                    <circle class="success-ring-bg" cx="24" cy="24" r="22" stroke-width="3"/>
-                                    <circle class="success-ring-progress" cx="24" cy="24" r="22" stroke-width="3"/>
-                                </svg>
-                                <div class="success-ring-icon">&#9654;</div>
-                            </div>
-                            <h2 id="play-success-title">Now Playing</h2>
-                        </div>
-                        <div class="success-details">
-                            <p id="play-success-message" class="success-detail-line"></p>
-                        </div>
-                        <div class="success-actions">
-                            <button class="btn btn-ghost" onclick="dismissPlaySuccess()">Back to Tracks</button>
-                            <button id="play-success-new-btn" class="btn btn-primary">New Playlist</button>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Update Success Modal -->
                 <div id="update-success-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="update-success-title">
                     <div class="modal-card modal-card--success">
@@ -379,6 +324,125 @@
                             <a id="update-open-in-plex-btn" class="btn btn-plex" href="#" target="_blank" rel="noopener">Open in Plex <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/><path d="m21 3-9 9"/><path d="M15 3h6v6"/></svg></a>
                             <button id="update-new-playlist-btn" class="btn btn-primary">New Playlist</button>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recommend Album View -->
+            <div id="recommend-view" class="view">
+                <!-- Sync Progress Overlay (shown during migration re-sync) -->
+                <div id="rec-sync-overlay" class="rec-sync-overlay hidden" role="status" aria-live="polite">
+                    <div class="rec-sync-content">
+                        <h2>Updating Library</h2>
+                        <p>Your library is being synced to enable album recommendations.</p>
+                        <div class="rec-sync-progress-bar">
+                            <div id="rec-sync-progress-fill" class="rec-sync-progress-fill"></div>
+                        </div>
+                        <p id="rec-sync-progress-text" class="rec-sync-progress-text">Starting sync...</p>
+                    </div>
+                </div>
+
+                <!-- 4-Step Progress Bar -->
+                <div class="rec-progress" role="navigation" aria-label="Recommendation steps">
+                    <div class="rec-step active" data-rec-step="setup">
+                        <span class="rec-step-circle">1</span>
+                        <span class="rec-step-label">Setup</span>
+                    </div>
+                    <div class="rec-step-connector"></div>
+                    <div class="rec-step" data-rec-step="prompt">
+                        <span class="rec-step-circle">2</span>
+                        <span class="rec-step-label">Prompt</span>
+                    </div>
+                    <div class="rec-step-connector"></div>
+                    <div class="rec-step" data-rec-step="questions">
+                        <span class="rec-step-circle">3</span>
+                        <span class="rec-step-label">Questions</span>
+                    </div>
+                    <div class="rec-step-connector"></div>
+                    <div class="rec-step" data-rec-step="results">
+                        <span class="rec-step-circle">4</span>
+                        <span class="rec-step-label">Results</span>
+                    </div>
+                </div>
+
+                <!-- Step Panels -->
+                <div class="rec-step-content">
+                    <!-- Setup Step: Mode + Filters -->
+                    <div id="rec-step-setup" class="rec-panel active">
+                        <h2>Choose your mode</h2>
+                        <div class="rec-mode-control" role="group" aria-label="Recommendation mode">
+                            <button class="rec-mode-btn active" data-rec-mode="library" aria-pressed="true">From My Library</button>
+                            <button class="rec-mode-btn" data-rec-mode="discovery" aria-pressed="false">Something New</button>
+                        </div>
+                        <div class="rec-filters">
+                            <div class="filter-section">
+                                <div class="filter-section-header">
+                                    <h3>Genres</h3>
+                                    <button id="rec-genre-toggle-all" class="filter-toggle-all" aria-label="Select all genres">Select All</button>
+                                </div>
+                                <div id="rec-genre-chips" class="chip-container" role="group" aria-label="Genre filters"></div>
+                            </div>
+                            <div class="filter-section">
+                                <div class="filter-section-header">
+                                    <h3>Decades</h3>
+                                    <button id="rec-decade-toggle-all" class="filter-toggle-all" aria-label="Select all decades">Select All</button>
+                                </div>
+                                <div id="rec-decade-chips" class="chip-container" role="group" aria-label="Decade filters"></div>
+                            </div>
+                        </div>
+                        <div id="rec-album-preview" class="rec-album-preview">
+                            <span id="rec-preview-count">-- albums</span>
+                            <span id="rec-preview-cost" class="preview-stat">Est. cost: --</span>
+                        </div>
+                        <label class="rec-familiarity-toggle">
+                            <input type="checkbox" id="rec-familiarity-toggle">
+                            <span>Use play history</span>
+                            <span class="rec-familiarity-hint">Adjusts pitch framing based on how well you know each album</span>
+                        </label>
+                        <button id="rec-setup-next" class="btn btn-primary">Next</button>
+                    </div>
+
+                    <!-- Prompt Step -->
+                    <div id="rec-step-prompt" class="rec-panel">
+                        <h2>What are you in the mood for?</h2>
+                        <p class="step-description">Describe the vibe, moment, or feeling you want an album for.</p>
+                        <textarea id="rec-prompt-input" class="prompt-textarea" placeholder="e.g., something for a rainy Sunday morning..." rows="4" aria-label="Album recommendation prompt"></textarea>
+                        <div class="rec-example-prompts">
+                            <p class="rec-example-label">Or try one of these</p>
+                            <div id="rec-prompt-pills" class="rec-prompt-pills"></div>
+                        </div>
+                        <button id="rec-prompt-next" class="btn btn-primary">Next</button>
+                    </div>
+
+                    <!-- Questions Step -->
+                    <div id="rec-step-questions" class="rec-panel">
+                        <h2>Just a couple questions</h2>
+                        <p class="step-description">Help us narrow it down. Skip any you're not sure about.</p>
+                        <div id="rec-questions-container" class="rec-questions-container"></div>
+                        <button id="rec-get-recommendation" class="btn btn-primary">Get Recommendation</button>
+                    </div>
+
+                    <!-- Results Step -->
+                    <div id="rec-step-results" class="rec-panel">
+                        <div id="rec-research-warning" class="rec-research-warning hidden">
+                            Research was unavailable — factual details could not be verified and may be approximate.
+                        </div>
+                        <div id="rec-primary-result" class="rec-primary-result"></div>
+                        <div id="rec-secondary-results" class="rec-secondary-results">
+                            <h3 class="rec-secondary-heading">Also worth exploring</h3>
+                            <div id="rec-secondary-cards" class="rec-secondary-cards"></div>
+                        </div>
+                        <div id="rec-discovery-bridge" class="rec-discovery-bridge hidden">
+                            <button id="rec-try-discovery" class="rec-discovery-link">Recommend something not in my library</button>
+                        </div>
+                        <div id="rec-cost-footer" class="rec-cost-footer"></div>
+                    </div>
+                </div>
+
+                <!-- Loading Overlay (Recommend) -->
+                <div id="rec-loading-overlay" class="rec-loading-overlay hidden" role="status" aria-live="polite" aria-busy="true">
+                    <div class="rec-loading-content">
+                        <div id="rec-progress-list" class="rec-progress-list"></div>
                     </div>
                 </div>
             </div>
@@ -508,6 +572,62 @@
                 </section>
             </div>
         </main>
+
+        <!-- Client Picker Modal (global – used by both create and recommend views) -->
+        <div id="client-picker-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="client-picker-title">
+            <div class="modal-card">
+                <button class="modal-close" onclick="dismissClientPicker()" aria-label="Close">&times;</button>
+                <h2 id="client-picker-title">Select a Device</h2>
+                <p id="client-picker-hint" class="client-picker-hint hidden">
+                    <span class="hint-group"><span class="client-hint-dot playing"></span> Playing</span>
+                    <span class="hint-group"><span class="client-hint-dot"></span> Idle</span>
+                    <span class="hint-group"><span class="client-hint-dot mobile"></span> Needs active session</span>
+                </p>
+                <div id="client-list" class="client-list" role="listbox" aria-label="Available devices"></div>
+                <div id="client-empty-state" class="client-empty-state hidden">
+                    <p>No Plex clients active. Open Plexamp or Plex first.</p>
+                    <button id="refresh-clients-btn" class="btn btn-secondary">Refresh</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Play Mode Choice Modal -->
+        <div id="play-choice-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="play-choice-title">
+            <div class="modal-card">
+                <button class="modal-close" onclick="dismissPlayChoice()" aria-label="Close">&times;</button>
+                <h2 id="play-choice-title">Device is currently playing</h2>
+                <p class="play-choice-description">What would you like to do?</p>
+                <div class="play-choice-buttons">
+                    <button id="replace-queue-btn" class="btn btn-primary play-choice-btn">Replace Queue</button>
+                    <button id="play-next-btn" class="btn btn-secondary play-choice-btn">Play Next</button>
+                </div>
+                <button class="btn-link modal-cancel" onclick="dismissPlayChoice()">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Play Now Success Modal -->
+        <div id="play-success-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="play-success-title">
+            <div class="modal-card modal-card--success">
+                <button class="modal-close" onclick="dismissPlaySuccess()" aria-label="Close">&times;</button>
+                <div class="success-hero">
+                    <div class="success-ring" aria-hidden="true">
+                        <svg class="success-ring-svg" viewBox="0 0 48 48" fill="none">
+                            <circle class="success-ring-bg" cx="24" cy="24" r="22" stroke-width="3"/>
+                            <circle class="success-ring-progress" cx="24" cy="24" r="22" stroke-width="3"/>
+                        </svg>
+                        <div class="success-ring-icon">&#9654;</div>
+                    </div>
+                    <h2 id="play-success-title">Now Playing</h2>
+                </div>
+                <div class="success-details">
+                    <p id="play-success-message" class="success-detail-line"></p>
+                </div>
+                <div class="success-actions">
+                    <button class="btn btn-ghost" onclick="dismissPlaySuccess()">Back to Tracks</button>
+                    <button id="play-success-new-btn" class="btn btn-primary">New Playlist</button>
+                </div>
+            </div>
+        </div>
 
         <!-- Track Reason Bottom Sheet (Mobile) -->
         <div id="bottom-sheet" class="bottom-sheet hidden" role="dialog" aria-modal="true" aria-labelledby="bottom-sheet-title">
