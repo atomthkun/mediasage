@@ -13,6 +13,8 @@ MediaSage is a self-hosted web application that generates Plex music playlists u
 - SQLite (library cache at `data/library_cache.db`) - no schema changes needed (004-curator-narrative)
 - Python 3.11+ (backend), Vanilla JavaScript ES6+ (frontend) + FastAPI, python-plexapi (v4.18.0), Pydantic, httpx (005-instant-queue)
 - N/A (localStorage for frontend save mode persistence) (005-instant-queue)
+- Python 3.11+ (backend), Vanilla JavaScript ES6+ (frontend) + FastAPI, python-plexapi, httpx, Pydantic, anthropic/openai/google-genai SDKs (006-recommend-album)
+- SQLite file at `data/library_cache.db` (read-only for album aggregation from existing track cache) (006-recommend-album)
 
 - **Backend**: Python 3.11+, FastAPI, python-plexapi, anthropic SDK, openai SDK, pydantic, uvicorn, rapidfuzz, unidecode
 - **Frontend**: Vanilla HTML/CSS/JS (no build step)
@@ -127,6 +129,6 @@ Option: `smart_generation: true` uses analysis model for both (higher quality, ~
 <!-- MANUAL ADDITIONS END -->
 
 ## Recent Changes
+- 006-recommend-album: Added Python 3.11+ (backend), Vanilla JavaScript ES6+ (frontend) + FastAPI, python-plexapi, httpx, Pydantic, anthropic/openai/google-genai SDKs
 - 005-instant-queue: Added Python 3.11+ (backend), Vanilla JavaScript ES6+ (frontend) + FastAPI, python-plexapi (v4.18.0), Pydantic, httpx
 - 004-curator-narrative: Added Python 3.11+ (backend), Vanilla JavaScript ES6+ (frontend) + FastAPI, python-plexapi, google-genai, anthropic, openai, pydantic, rapidfuzz
-- 003-local-library-cache: Added Python 3.11+ (backend), Vanilla JavaScript ES6+ (frontend) + FastAPI, python-plexapi, sqlite3 (stdlib), Pydantic
