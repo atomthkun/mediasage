@@ -136,6 +136,7 @@ const state = {
         prompt: '',
         selectedGenres: [],
         selectedDecades: [],
+        familiarityPref: 'any', // 'any' | 'comfort' | 'rediscover' | 'hidden_gems'
         questions: [],
         answers: [],           // Selected option per question (null = skipped)
         answerTexts: [],       // Free-text additions per question
@@ -1906,9 +1907,19 @@ async function checkLibraryStatus() {
         // Update footer status
         updateFooterLibraryStatus(status);
 
-        // If cache is empty and Plex is connected, trigger first-time sync
+        // If cache is empty and Plex is connected, trigger sync
         if (status.track_count === 0 && status.plex_connected && !status.is_syncing) {
-            await startFirstTimeSync();
+            if (!status.synced_at) {
+                // Genuine first-time sync — blocking modal
+                await startFirstTimeSync();
+            } else {
+                // Cache empty after a previous sync (migration re-sync or error)
+                // Trigger silently — footer shows progress
+                try {
+                    await triggerLibrarySync();
+                } catch { /* sync may already be in progress (409) */ }
+                startSyncPolling();
+            }
         } else if (status.is_syncing) {
             // Only show blocking modal for first-time sync (no previous sync)
             // Background refreshes (synced_at exists) poll silently
@@ -3480,7 +3491,6 @@ async function handleRecQuestions() {
     ]);
 
     try {
-        const familiarityToggle = document.getElementById('rec-familiarity-toggle');
         const data = await apiCall('/recommend/questions', {
             method: 'POST',
             body: JSON.stringify({
@@ -3488,7 +3498,7 @@ async function handleRecQuestions() {
                 mode: state.rec.mode,
                 genres: (state.availableGenres.length > 0 && state.rec.selectedGenres.length === state.availableGenres.length) ? [] : state.rec.selectedGenres,
                 decades: (state.availableDecades.length > 0 && state.rec.selectedDecades.length === state.availableDecades.length) ? [] : state.rec.selectedDecades,
-                familiarity_enabled: familiarityToggle?.checked || false,
+                familiarity_pref: state.rec.familiarityPref,
             }),
         });
 
@@ -3528,6 +3538,37 @@ function renderRecQuestions() {
             <button class="rec-question-skip" data-question="${qi}">Skip this question</button>
         </div>
     `).join('');
+}
+
+async function handleRecSwitchToDiscovery() {
+    state.rec.loading = true;
+    showRecLoading([
+        { id: 'switching', text: 'Switching to discovery mode...', status: 'active' },
+    ]);
+
+    try {
+        const data = await apiCall('/recommend/switch-mode', {
+            method: 'POST',
+            body: JSON.stringify({
+                session_id: state.rec.sessionId,
+                mode: 'discovery',
+            }),
+        });
+
+        state.rec.mode = 'discovery';
+        state.rec.sessionId = data.session_id;
+        document.querySelectorAll('.rec-mode-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.recMode === 'discovery');
+            b.setAttribute('aria-pressed', b.dataset.recMode === 'discovery' ? 'true' : 'false');
+        });
+
+        hideRecLoading();
+        handleRecGenerate();
+    } catch (e) {
+        hideRecLoading();
+        showError(e.message);
+        state.rec.loading = false;
+    }
 }
 
 async function handleRecGenerate() {
@@ -3686,7 +3727,7 @@ function renderRecResults() {
         const pitch = primary.pitch || {};
         primaryContainer.innerHTML = `
             <div class="rec-primary-layout">
-                <div>${artHtml}</div>
+                ${artHtml}
                 <div class="rec-primary-pitch">
                     <div class="rec-pitch-album-title">${escapeHtml(primary.album)}</div>
                     <div class="rec-pitch-artist">${escapeHtml(primary.artist)}${primary.year ? ` (${primary.year})` : ''}</div>
@@ -3702,18 +3743,17 @@ function renderRecResults() {
                             ${escapeHtml(pitch.listening_guide)}
                         </div>` : ''}
                     ${pitch.connection ? `
-                        <div class="rec-pitch-section">
+                        <div class="rec-pitch-section rec-pitch-section--connection">
                             <div class="rec-pitch-section-label">Why This Album</div>
                             ${escapeHtml(pitch.connection)}
                         </div>` : ''}
                     <div class="rec-primary-actions">
                         ${primary.track_rating_keys?.length ? `
-                            <button class="btn btn-primary btn-sm rec-play-btn" data-rating-keys="${primary.track_rating_keys.join(',')}">&#9654; Play Now</button>
-                            <button class="btn btn-secondary btn-sm rec-save-btn" data-album="${escapeHtml(primary.album)}" data-artist="${escapeHtml(primary.artist)}" data-rating-keys="${primary.track_rating_keys.join(',')}" data-pitch="${escapeHtml(pitch.full_text || '')}">Save to Playlist</button>
-                            <div class="rec-actions-divider"></div>
+                            <button class="btn btn-primary rec-play-btn" data-rating-keys="${primary.track_rating_keys.join(',')}">&#9654; Play Now</button>
+                            <button class="btn btn-secondary rec-save-btn" data-album="${escapeHtml(primary.album)}" data-artist="${escapeHtml(primary.artist)}" data-rating-keys="${primary.track_rating_keys.join(',')}" data-pitch="${escapeHtml(pitch.full_text || '')}">Save to Playlist</button>
                         ` : ''}
                         <button class="rec-action-link" id="rec-show-another">Show me another</button>
-                        <button class="rec-action-link" id="rec-start-over">Start over</button>
+                        <button class="rec-action-link rec-action-link--subtle" id="rec-start-over">Start over</button>
                     </div>
                 </div>
             </div>
@@ -3784,14 +3824,31 @@ function resetRecState() {
 }
 
 function setupRecEventListeners() {
-    // Familiarity toggle — restore from localStorage
-    const familiarityToggle = document.getElementById('rec-familiarity-toggle');
-    if (familiarityToggle) {
+    // Familiarity preference pills — restore from localStorage
+    const familiarityPills = document.getElementById('rec-familiarity-pills');
+    if (familiarityPills) {
         try {
-            familiarityToggle.checked = localStorage.getItem('mediasage-familiarity') === 'true';
+            const saved = localStorage.getItem('mediasage-familiarity-pref');
+            if (saved && ['any', 'comfort', 'rediscover', 'hidden_gems'].includes(saved)) {
+                state.rec.familiarityPref = saved;
+                familiarityPills.querySelectorAll('.chip').forEach(btn => {
+                    const isSelected = btn.dataset.familiarity === saved;
+                    btn.classList.toggle('selected', isSelected);
+                    btn.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+                });
+            }
         } catch (e) { /* private browsing */ }
-        familiarityToggle.addEventListener('change', () => {
-            try { localStorage.setItem('mediasage-familiarity', familiarityToggle.checked); } catch (e) { /* private browsing */ }
+
+        familiarityPills.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chip[data-familiarity]');
+            if (!btn) return;
+            state.rec.familiarityPref = btn.dataset.familiarity;
+            familiarityPills.querySelectorAll('.chip').forEach(b => {
+                const isSelected = b === btn;
+                b.classList.toggle('selected', isSelected);
+                b.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+            });
+            try { localStorage.setItem('mediasage-familiarity-pref', state.rec.familiarityPref); } catch (e) { /* private browsing */ }
         });
     }
 
@@ -3958,12 +4015,7 @@ function setupRecEventListeners() {
             resetRecState();
         }
         if (e.target.id === 'rec-try-discovery') {
-            state.rec.mode = 'discovery';
-            document.querySelectorAll('.rec-mode-btn').forEach(b => {
-                b.classList.toggle('active', b.dataset.recMode === 'discovery');
-                b.setAttribute('aria-pressed', b.dataset.recMode === 'discovery' ? 'true' : 'false');
-            });
-            handleRecQuestions();
+            handleRecSwitchToDiscovery();
         }
     });
 }

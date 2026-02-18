@@ -394,11 +394,16 @@
                             <span id="rec-preview-count">-- albums</span>
                             <span id="rec-preview-cost" class="preview-stat">Est. cost: --</span>
                         </div>
-                        <label class="rec-familiarity-toggle">
-                            <input type="checkbox" id="rec-familiarity-toggle">
-                            <span>Use play history</span>
-                            <span class="rec-familiarity-hint">Adjusts pitch framing based on how well you know each album</span>
-                        </label>
+                        <div class="filter-section">
+                            <h3>Play History</h3>
+                            <div id="rec-familiarity-pills" class="chip-container" role="radiogroup" aria-label="Play history preference">
+                                <button class="chip selected" data-familiarity="any" role="radio" aria-checked="true">Any</button>
+                                <button class="chip" data-familiarity="comfort" role="radio" aria-checked="false">Comfort picks</button>
+                                <button class="chip" data-familiarity="rediscover" role="radio" aria-checked="false">Rediscover</button>
+                                <button class="chip" data-familiarity="hidden_gems" role="radio" aria-checked="false">Hidden gems</button>
+                            </div>
+                            <p class="rec-familiarity-hint">Influences which albums are suggested</p>
+                        </div>
                         <button id="rec-setup-next" class="btn btn-primary">Next</button>
                     </div>
 
