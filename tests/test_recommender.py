@@ -194,3 +194,129 @@ class TestMusicResearchReviews:
 
         assert result is not None
         assert len(result) <= 2100  # Allow small margin for sentence boundary
+
+
+class TestFactExtraction:
+    """Test the LLM fact extraction step."""
+
+    def test_extract_facts_returns_structured_data(self):
+        """extract_facts should return an ExtractedFacts from research data."""
+        from backend.recommender import RecommendationPipeline
+
+        mock_llm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = '{"origin_story": "Recorded in Reykjavik"}'
+        mock_response.input_tokens = 100
+        mock_response.output_tokens = 50
+        mock_response.model = "test-model"
+        mock_response.estimated_cost.return_value = 0.001
+        mock_llm.generate.return_value = mock_response
+        mock_llm.parse_json_response.return_value = {
+            "origin_story": "Recorded in Reykjavik",
+            "personnel": ["Jonsi"],
+            "musical_style": "Post-rock with orchestral arrangements",
+            "vocal_approach": "Mostly Icelandic vocals, Vonlenska on 2 tracks only",
+            "cultural_context": "Breakthrough album internationally",
+            "track_highlights": "Svefn-g-englar is the lead single",
+            "common_misconceptions": "Often assumed to be entirely in Vonlenska but most tracks are in Icelandic",
+            "source_coverage": "Wikipedia covers recording and reception well",
+        }
+
+        pipeline = RecommendationPipeline(config=MagicMock(), llm_client=mock_llm)
+
+        rd = ResearchData(
+            wikipedia_summary="Agaetis byrjun is the second album by Sigur Ros...",
+            track_listing=["Intro", "Svefn-g-englar", "Staralfur"],
+            label="Smekkleysa",
+            release_date="1999-06-12",
+            credits={"Primary Artist": "Sigur Ros"},
+            review_texts=["A landmark post-rock album..."],
+        )
+
+        facts = pipeline.extract_facts(
+            artist="Sigur Ros",
+            album="Agaetis byrjun",
+            research=rd,
+            session_id="test-session",
+        )
+
+        assert isinstance(facts, ExtractedFacts)
+        assert "Vonlenska" in facts.vocal_approach
+        assert "Icelandic" in facts.vocal_approach
+        mock_llm.generate.assert_called_once()
+
+    def test_extract_facts_includes_all_sources_in_prompt(self):
+        """extract_facts should pass Wikipedia, reviews, and track listing to LLM."""
+        from backend.recommender import RecommendationPipeline
+
+        mock_llm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.input_tokens = 100
+        mock_response.output_tokens = 50
+        mock_response.model = "test-model"
+        mock_response.estimated_cost.return_value = 0.001
+        mock_llm.generate.return_value = mock_response
+        mock_llm.parse_json_response.return_value = {
+            "origin_story": "", "personnel": [], "musical_style": "",
+            "vocal_approach": "", "cultural_context": "", "track_highlights": "",
+            "common_misconceptions": "", "source_coverage": "",
+        }
+
+        pipeline = RecommendationPipeline(config=MagicMock(), llm_client=mock_llm)
+
+        rd = ResearchData(
+            wikipedia_summary="Wikipedia content here",
+            review_texts=["Pitchfork review content", "Stereogum review content"],
+            track_listing=["Track One", "Track Two"],
+            label="Test Label",
+            release_date="2020",
+        )
+
+        pipeline.extract_facts(
+            artist="Test Artist", album="Test Album",
+            research=rd, session_id="test",
+        )
+
+        # Verify the prompt includes all source material
+        call_args = mock_llm.generate.call_args
+        prompt = call_args[0][0]  # First positional arg is the user prompt
+        assert "Wikipedia content here" in prompt
+        assert "Pitchfork review content" in prompt
+        assert "Stereogum review content" in prompt
+        assert "Track One" in prompt
+        assert "Test Label" in prompt
+
+    def test_extract_facts_handles_empty_research(self):
+        """extract_facts should handle research with no Wikipedia or reviews."""
+        from backend.recommender import RecommendationPipeline
+
+        mock_llm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.input_tokens = 10
+        mock_response.output_tokens = 10
+        mock_response.model = "test-model"
+        mock_response.estimated_cost.return_value = 0.0
+        mock_llm.generate.return_value = mock_response
+        mock_llm.parse_json_response.return_value = {
+            "origin_story": "NOT IN SOURCES",
+            "personnel": [],
+            "musical_style": "NOT IN SOURCES",
+            "vocal_approach": "NOT IN SOURCES",
+            "cultural_context": "NOT IN SOURCES",
+            "track_highlights": "",
+            "common_misconceptions": "",
+            "source_coverage": "No Wikipedia or review sources available",
+        }
+
+        pipeline = RecommendationPipeline(config=MagicMock(), llm_client=mock_llm)
+
+        rd = ResearchData(
+            label="Test Label",
+            track_listing=["Track 1"],
+        )
+
+        facts = pipeline.extract_facts(
+            artist="Test", album="Test", research=rd, session_id="test",
+        )
+
+        assert isinstance(facts, ExtractedFacts)
