@@ -6,6 +6,8 @@ release dates, personnel, recording context, and critical reception.
 
 import asyncio
 import logging
+import re
+import time
 from urllib.parse import unquote
 
 import httpx
@@ -44,7 +46,6 @@ class MusicResearchClient:
 
     async def _rate_limit(self) -> None:
         """Enforce MusicBrainz rate limiting (1 req/sec)."""
-        import time
         async with self._rate_lock:
             now = time.time()
             elapsed = now - self._last_mb_request
@@ -58,7 +59,6 @@ class MusicResearchClient:
 
         Returns the cleaned name, or None if nothing was stripped.
         """
-        import re
         cleaned = re.sub(
             r"\s*\("
             r"(?:Explicit|Clean|Deluxe|Special|Expanded|Anniversary|Limited|"
@@ -102,8 +102,8 @@ class MusicResearchClient:
             if release_groups:
                 return release_groups[0].get("id")
         except Exception as e:
-            logger.warning("MusicBrainz search failed for %s — %s: %s", artist, album, e)
-            return None
+            logger.warning("MusicBrainz strict search failed for %s — %s: %s", artist, album, e)
+            # Fall through to next strategy rather than aborting
 
         # Step 2: Cleaned search — strip Plex parenthetical suffixes
         cleaned = self._clean_album_name(album)
@@ -145,20 +145,22 @@ class MusicResearchClient:
                 logger.info("No MusicBrainz match for %s — %s (fallback)", artist, album)
                 return None
 
-            return self._pick_best_release_group(candidates, search_name, year)
+            return self._pick_best_release_group(candidates, search_name, year, artist)
         except Exception as e:
             logger.warning("MusicBrainz fallback search failed for %s — %s: %s", artist, album, e)
             return None
 
     @staticmethod
     def _pick_best_release_group(
-        candidates: list[dict], album: str, year: int | None
+        candidates: list[dict], album: str, year: int | None,
+        original_artist: str | None = None,
     ) -> str | None:
         """Score and pick the best release group from fallback results.
 
-        Prefers: exact title match, Album type, year match, higher MB score.
+        Prefers: artist match, exact title match, Album type, year match, higher MB score.
         """
         album_lower = album.lower()
+        artist_lower = original_artist.lower() if original_artist else None
         best_id = None
         best_score = -1
 
@@ -166,6 +168,14 @@ class MusicResearchClient:
             score = 0
             title = rg.get("title", "")
             title_lower = title.lower()
+
+            # Artist match (strong signal to avoid wrong-artist albums)
+            if artist_lower:
+                for credit in rg.get("artist-credit", []):
+                    credit_name = credit.get("name", "").lower()
+                    if artist_lower == credit_name or artist_lower in credit_name:
+                        score += 60
+                        break
 
             # Title match: exact > starts-with > contains
             if title_lower == album_lower:
@@ -397,7 +407,6 @@ class MusicResearchClient:
             readable_html = doc.summary()
 
             # Strip HTML tags to get plain text
-            import re
             text = re.sub(r"<[^>]+>", " ", readable_html)
             text = re.sub(r"\s+", " ", text).strip()
 
