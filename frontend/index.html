@@ -14,49 +14,80 @@
     <div class="app">
         <!-- Header -->
         <header class="header">
-            <h1 class="logo">MediaSage</h1>
+            <h1 class="logo"><a href="#home" class="logo-link">MediaSage</a></h1>
             <nav class="nav" role="navigation" aria-label="Main navigation">
-                <button class="nav-btn active" data-view="create" aria-current="true">Make a Playlist</button>
-                <button class="nav-btn" data-view="recommend" aria-current="false">Recommend Album</button>
-                <button class="nav-btn nav-btn--icon" data-view="settings" aria-current="false" aria-label="Settings"><svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                <div class="nav-dropdown">
+                    <button class="nav-dropdown-trigger" aria-expanded="false" aria-haspopup="true">
+                        Make Playlist <span class="nav-chevron" aria-hidden="true">&#9662;</span>
+                    </button>
+                    <div class="nav-dropdown-menu" role="menu">
+                        <button class="nav-dropdown-item" role="menuitem" data-nav="playlist-prompt">
+                            <span class="nav-check" aria-hidden="true"></span> From Prompt
+                        </button>
+                        <button class="nav-dropdown-item" role="menuitem" data-nav="playlist-seed">
+                            <span class="nav-check" aria-hidden="true"></span> From Seed Song
+                        </button>
+                    </div>
+                </div>
+                <button class="nav-btn" data-nav="recommend-album" aria-current="false">Recommend Album</button>
+                <button class="nav-btn nav-btn--icon" data-nav="settings" aria-current="false" aria-label="Settings"><svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
             </nav>
         </header>
 
         <!-- Main Content -->
         <main class="main" id="main-content">
-            <!-- Create View -->
-            <div id="create-view" class="view active">
-                <!-- Mode Selection -->
-                <div class="mode-tabs" role="group" aria-label="Playlist creation mode">
-                    <button class="mode-tab active" data-mode="prompt" aria-pressed="true">
-                        <span class="mode-icon" aria-hidden="true">💭</span>
-                        <span class="mode-label">Prompt</span>
-                    </button>
-                    <button class="mode-tab" data-mode="seed" aria-pressed="false">
-                        <span class="mode-icon" aria-hidden="true">🎵</span>
-                        <span class="mode-label">Seed Track</span>
-                    </button>
+            <!-- Home View -->
+            <div id="home-view" class="view">
+                <div class="home-content">
+                    <h2 class="home-greeting">What do you want to listen to?</h2>
+                    <p class="home-subtitle">Create a playlist or discover an album from your Plex library.</p>
+                    <div class="home-cards">
+                        <button class="home-card" data-nav="playlist-prompt">
+                            <div class="home-card-icon" aria-hidden="true">&#9998;</div>
+                            <div class="home-card-title">Playlist from Prompt</div>
+                            <div class="home-card-desc">Describe a vibe and let AI curate tracks</div>
+                        </button>
+                        <button class="home-card" data-nav="playlist-seed">
+                            <div class="home-card-icon" aria-hidden="true">&#9835;</div>
+                            <div class="home-card-title">Playlist from Seed</div>
+                            <div class="home-card-desc">Start from a song you love</div>
+                        </button>
+                        <button class="home-card" data-nav="recommend-album">
+                            <div class="home-card-icon" aria-hidden="true">&#128191;</div>
+                            <div class="home-card-title">Recommend Album</div>
+                            <div class="home-card-desc">Find the perfect album for the moment</div>
+                        </button>
+                    </div>
+                    <div class="home-history">
+                        <h3 class="home-history-header">Recent activity</h3>
+                        <div class="home-history-placeholder">
+                            Your playlist and album history will appear here
+                        </div>
+                    </div>
                 </div>
+            </div>
 
+            <!-- Create View -->
+            <div id="create-view" class="view">
                 <!-- Step Progress -->
-                <div class="step-progress" role="navigation" aria-label="Playlist creation steps">
+                <div id="playlist-steps" class="step-progress" role="navigation" aria-label="Playlist creation steps">
                     <div class="step active" data-step="input" aria-current="step">
-                        <span class="step-number">1</span>
-                        <span class="step-label">Input</span>
+                        <span class="step-circle">1</span>
+                        <span class="step-label" id="step-label-input">Prompt</span>
                     </div>
                     <div class="step-connector" aria-hidden="true"></div>
                     <div class="step" data-step="dimensions">
-                        <span class="step-number">2</span>
+                        <span class="step-circle">2</span>
                         <span class="step-label">Dimensions</span>
                     </div>
                     <div class="step-connector" aria-hidden="true"></div>
                     <div class="step" data-step="filters">
-                        <span class="step-number">3</span>
+                        <span class="step-circle">3</span>
                         <span class="step-label">Filters</span>
                     </div>
                     <div class="step-connector" aria-hidden="true"></div>
                     <div class="step" data-step="results">
-                        <span class="step-number">4</span>
+                        <span class="step-circle">4</span>
                         <span class="step-label">Results</span>
                     </div>
                 </div>
@@ -130,11 +161,6 @@
                         <h2>Filter your library</h2>
                         <p class="step-description">Select genres and decades to narrow down the tracks sent to the AI. Smaller pools mean lower costs and more focused results.</p>
 
-                        <div id="filter-preview" class="filter-preview">
-                            <span id="preview-tracks" class="preview-stat">-- matching tracks</span>
-                            <span id="preview-cost" class="preview-stat">Est. cost: --</span>
-                        </div>
-
                         <div class="filter-section">
                             <div class="filter-section-header">
                                 <h3>Genres</h3>
@@ -164,19 +190,6 @@
                         </div>
 
                         <div class="filter-section">
-                            <h3>Max Tracks to AI</h3>
-                            <p class="filter-hint">Limit how many tracks are sent to the AI for selection. Higher = better variety but more cost.</p>
-                            <div class="track-limit-selector" role="group" aria-label="Maximum tracks to send to AI">
-                                <button class="limit-btn" data-limit="100" aria-pressed="false">100</button>
-                                <button class="limit-btn" data-limit="250" aria-pressed="false">250</button>
-                                <button class="limit-btn active" data-limit="500" aria-pressed="true">500</button>
-                                <button class="limit-btn" data-limit="1000" aria-pressed="false">1000</button>
-                                <button class="limit-btn" data-limit="0" aria-pressed="false">No limit</button>
-                            </div>
-                            <p id="gemini-suggestion" class="filter-hint gemini-suggestion hidden"></p>
-                        </div>
-
-                        <div class="filter-section">
                             <label class="checkbox-label">
                                 <input type="checkbox" id="exclude-live" checked>
                                 <span>Exclude live versions</span>
@@ -192,6 +205,24 @@
                                 <button class="rating-btn" data-rating="6" aria-pressed="false">★★★+</button>
                                 <button class="rating-btn" data-rating="8" aria-pressed="false">★★★★+</button>
                             </div>
+                        </div>
+
+                        <div class="filter-section">
+                            <h3>Max Tracks to AI</h3>
+                            <p class="filter-hint">Limit how many tracks are sent to the AI for selection. Higher = better variety but more cost.</p>
+                            <div class="track-limit-selector" role="group" aria-label="Maximum tracks to send to AI">
+                                <button class="limit-btn" data-limit="100" aria-pressed="false">100</button>
+                                <button class="limit-btn" data-limit="250" aria-pressed="false">250</button>
+                                <button class="limit-btn active" data-limit="500" aria-pressed="true">500</button>
+                                <button class="limit-btn" data-limit="1000" aria-pressed="false">1000</button>
+                                <button class="limit-btn" data-limit="0" aria-pressed="false">No limit</button>
+                            </div>
+                            <p id="gemini-suggestion" class="filter-hint gemini-suggestion hidden"></p>
+                        </div>
+
+                        <div id="filter-preview" class="filter-preview">
+                            <span id="preview-tracks" class="preview-stat">-- matching tracks</span>
+                            <span id="preview-cost" class="preview-stat">Est. cost: --</span>
                         </div>
 
                         <button id="generate-btn" class="btn btn-primary">
@@ -343,32 +374,48 @@
                 </div>
 
                 <!-- 4-Step Progress Bar -->
-                <div class="rec-progress" role="navigation" aria-label="Recommendation steps">
-                    <div class="rec-step active" data-rec-step="setup">
-                        <span class="rec-step-circle">1</span>
-                        <span class="rec-step-label">Setup</span>
+                <div id="rec-steps" class="step-progress" role="navigation" aria-label="Recommendation steps">
+                    <div class="step active" data-step="prompt">
+                        <span class="step-circle">1</span>
+                        <span class="step-label">Prompt</span>
                     </div>
-                    <div class="rec-step-connector"></div>
-                    <div class="rec-step" data-rec-step="prompt">
-                        <span class="rec-step-circle">2</span>
-                        <span class="rec-step-label">Prompt</span>
+                    <div class="step-connector"></div>
+                    <div class="step" data-step="setup">
+                        <span class="step-circle">2</span>
+                        <span class="step-label">Filters</span>
                     </div>
-                    <div class="rec-step-connector"></div>
-                    <div class="rec-step" data-rec-step="questions">
-                        <span class="rec-step-circle">3</span>
-                        <span class="rec-step-label">Questions</span>
+                    <div class="step-connector"></div>
+                    <div class="step" data-step="questions">
+                        <span class="step-circle">3</span>
+                        <span class="step-label">Questions</span>
                     </div>
-                    <div class="rec-step-connector"></div>
-                    <div class="rec-step" data-rec-step="results">
-                        <span class="rec-step-circle">4</span>
-                        <span class="rec-step-label">Results</span>
+                    <div class="step-connector"></div>
+                    <div class="step" data-step="results">
+                        <span class="step-circle">4</span>
+                        <span class="step-label">Results</span>
                     </div>
                 </div>
 
                 <!-- Step Panels -->
                 <div class="rec-step-content">
-                    <!-- Setup Step: Mode + Filters -->
-                    <div id="rec-step-setup" class="rec-panel active">
+                    <!-- Prompt Step -->
+                    <div id="rec-step-prompt" class="rec-panel active">
+                        <h2>What are you in the mood for?</h2>
+                        <p class="step-description">Describe the vibe, moment, or feeling you want an album for.</p>
+                        <textarea id="rec-prompt-input" class="prompt-textarea" placeholder="e.g., something for a rainy Sunday morning..." rows="4" aria-label="Album recommendation prompt"></textarea>
+                        <div class="rec-example-prompts">
+                            <div class="rec-example-header">
+                                <p class="rec-example-label">Or try one of these</p>
+                                <button id="rec-prompt-shuffle" class="rec-prompt-shuffle" aria-label="Show different suggestions" title="Show different suggestions">&#x21bb;</button>
+                            </div>
+                            <div id="rec-prompt-pills" class="rec-prompt-pills"></div>
+                        </div>
+                        <button id="rec-prompt-next" class="btn btn-primary">Next</button>
+                    </div>
+
+                    <!-- Filters Step: Mode + Filters -->
+                    <div id="rec-step-setup" class="rec-panel">
+                        <p id="rec-filter-info" class="rec-filter-info hidden">Pre-selected based on your prompt. Adjust if needed.</p>
                         <h2>Choose your mode</h2>
                         <div class="rec-mode-control" role="group" aria-label="Recommendation mode">
                             <button class="rec-mode-btn active" data-rec-mode="library" aria-pressed="true">From My Library</button>
@@ -407,18 +454,6 @@
                         <button id="rec-setup-next" class="btn btn-primary">Next</button>
                     </div>
 
-                    <!-- Prompt Step -->
-                    <div id="rec-step-prompt" class="rec-panel">
-                        <h2>What are you in the mood for?</h2>
-                        <p class="step-description">Describe the vibe, moment, or feeling you want an album for.</p>
-                        <textarea id="rec-prompt-input" class="prompt-textarea" placeholder="e.g., something for a rainy Sunday morning..." rows="4" aria-label="Album recommendation prompt"></textarea>
-                        <div class="rec-example-prompts">
-                            <p class="rec-example-label">Or try one of these</p>
-                            <div id="rec-prompt-pills" class="rec-prompt-pills"></div>
-                        </div>
-                        <button id="rec-prompt-next" class="btn btn-primary">Next</button>
-                    </div>
-
                     <!-- Questions Step -->
                     <div id="rec-step-questions" class="rec-panel">
                         <h2>Just a couple questions</h2>
@@ -444,12 +479,6 @@
                     </div>
                 </div>
 
-                <!-- Loading Overlay (Recommend) -->
-                <div id="rec-loading-overlay" class="rec-loading-overlay hidden" role="status" aria-live="polite" aria-busy="true">
-                    <div class="rec-loading-content">
-                        <div id="rec-progress-list" class="rec-progress-list"></div>
-                    </div>
-                </div>
             </div>
 
             <!-- Settings View -->
@@ -578,6 +607,13 @@
             </div>
         </main>
 
+        <!-- Step-Based Loading Overlay (global – used by both playlist + album flows) -->
+        <div id="step-loading-overlay" class="step-loading-overlay hidden" role="status" aria-live="polite" aria-busy="true">
+            <div class="step-loading-content">
+                <div id="step-progress-list" class="step-progress-list"></div>
+            </div>
+        </div>
+
         <!-- Client Picker Modal (global – used by both create and recommend views) -->
         <div id="client-picker-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="client-picker-title">
             <div class="modal-card">
@@ -607,6 +643,19 @@
                     <button id="play-next-btn" class="btn btn-secondary play-choice-btn">Play Next</button>
                 </div>
                 <button class="btn-link modal-cancel" onclick="dismissPlayChoice()">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Recommend Restart Confirmation Modal -->
+        <div id="rec-restart-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="rec-restart-title">
+            <div class="modal-card">
+                <button class="modal-close" id="rec-restart-cancel-x" aria-label="Close">&times;</button>
+                <h2 id="rec-restart-title">Start a new recommendation?</h2>
+                <p class="play-choice-description">You'll lose your current recommendation.</p>
+                <div class="play-choice-buttons">
+                    <button id="rec-restart-confirm" class="btn btn-primary play-choice-btn">Start Over</button>
+                    <button id="rec-restart-cancel" class="btn btn-secondary play-choice-btn">Cancel</button>
+                </div>
             </div>
         </div>
 

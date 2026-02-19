@@ -68,7 +68,7 @@ const focusManager = {
 
 const state = {
     // Current view and mode
-    view: 'create', // 'create' | 'settings'
+    view: 'home', // 'home' | 'create' | 'recommend' | 'settings'
     mode: 'prompt', // 'prompt' | 'seed'
     step: 'input',  // 'input' | 'dimensions' | 'filters' | 'results'
 
@@ -132,7 +132,7 @@ const state = {
     // Recommendation (006)
     rec: {
         mode: 'library',       // 'library' | 'discovery'
-        step: 'setup',         // 'setup' | 'prompt' | 'questions' | 'results'
+        step: 'prompt',        // 'prompt' | 'setup' | 'questions' | 'results'
         prompt: '',
         selectedGenres: [],
         selectedDecades: [],
@@ -280,146 +280,6 @@ async function generatePlaylist(request) {
 // Allows aborting previous request when starting a new one
 let currentAbortController = null;
 
-// Progress message queue for smooth display
-const progressQueue = {
-    messages: [],
-    currentStep: null,
-    isProcessing: false,
-    minDisplayTime: 500,
-    onDisplay: null,
-    onComplete: null,
-    completeData: null,
-    aiCycleInterval: null,
-    aiCycleIndex: 0,
-    aiMessages: [
-        'AI is understanding your request...',
-        'AI is analyzing the vibe...',
-        'AI is scanning your library...',
-        'AI is browsing through artists...',
-        'AI is exploring albums...',
-        'AI is discovering hidden gems...',
-        'AI is evaluating track moods...',
-        'AI is considering tempo and energy...',
-        'AI is finding thematic connections...',
-        'AI is looking for complementary sounds...',
-        'AI is balancing familiar and fresh picks...',
-        'AI is thinking about playlist flow...',
-        'AI is ensuring variety across artists...',
-        'AI is checking for smooth transitions...',
-        'AI is refining the selection...',
-        'AI is curating the perfect mix...',
-        'AI is adding finishing touches...',
-        'AI is reviewing the final picks...',
-        'AI is almost there...',
-        'AI is wrapping up...',
-    ],
-
-    enqueue(step, message) {
-        // If we get a new step while on AI, stop the cycle
-        if (this.currentStep === 'ai_working' && step !== 'ai_working') {
-            this.stopAiCycle();
-        }
-
-        this.messages.push({ step, message });
-        if (!this.isProcessing) {
-            this.processNext();
-        }
-    },
-
-    // Mark as complete - will fire callback after queue drains
-    markComplete(data, callback) {
-        console.log('[MediaSage] markComplete called, isProcessing:', this.isProcessing, 'queueLength:', this.messages.length);
-        this.completeData = data;
-        this.onComplete = callback;
-        // If not processing, finish immediately
-        if (!this.isProcessing && this.messages.length === 0) {
-            console.log('[MediaSage] Queue empty, finishing immediately');
-            this.finish();
-        } else {
-            console.log('[MediaSage] Queue not empty or processing, waiting for drain');
-            // Fallback: if queue doesn't drain within 5 seconds, force finish
-            setTimeout(() => {
-                if (this.completeData && this.onComplete) {
-                    console.warn('[MediaSage] Queue drain timeout, forcing finish');
-                    this.finish();
-                }
-            }, 5000);
-        }
-    },
-
-    processNext() {
-        console.log('[MediaSage] processNext called, queueLength:', this.messages.length, 'hasCompleteData:', !!this.completeData);
-        if (this.messages.length === 0) {
-            this.isProcessing = false;
-            // If we have pending complete data, finish now
-            if (this.completeData && this.onComplete) {
-                console.log('[MediaSage] Queue drained, calling finish');
-                this.finish();
-            }
-            return;
-        }
-
-        this.isProcessing = true;
-        const { step, message } = this.messages.shift();
-        this.currentStep = step;
-
-        if (this.onDisplay) {
-            this.onDisplay(message);
-        }
-
-        // Start AI message cycling if we're on the AI step
-        if (step === 'ai_working') {
-            this.startAiCycle();
-        }
-
-        // Wait minimum time before processing next
-        setTimeout(() => {
-            this.processNext();
-        }, this.minDisplayTime);
-    },
-
-    finish() {
-        console.log('[MediaSage] progressQueue.finish() called, hasCallback:', !!this.onComplete, 'hasData:', !!this.completeData);
-        const callback = this.onComplete;
-        const data = this.completeData;
-        this.reset();
-        if (callback && data) {
-            console.log('[MediaSage] Calling onComplete callback with', data.tracks?.length || 0, 'tracks');
-            callback(data);
-        }
-    },
-
-    startAiCycle() {
-        this.aiCycleIndex = 0;
-        this.aiCycleInterval = setInterval(() => {
-            // Stop cycling when we reach the last message
-            if (this.aiCycleIndex >= this.aiMessages.length - 1) {
-                this.stopAiCycle();
-                return;
-            }
-            this.aiCycleIndex++;
-            if (this.onDisplay && this.currentStep === 'ai_working') {
-                this.onDisplay(this.aiMessages[this.aiCycleIndex]);
-            }
-        }, 4000);
-    },
-
-    stopAiCycle() {
-        if (this.aiCycleInterval) {
-            clearInterval(this.aiCycleInterval);
-            this.aiCycleInterval = null;
-        }
-    },
-
-    reset() {
-        this.messages = [];
-        this.currentStep = null;
-        this.isProcessing = false;
-        this.completeData = null;
-        this.onComplete = null;
-        this.stopAiCycle();
-    }
-};
 
 function generatePlaylistStream(request, onProgress, onComplete, onError) {
     // Abort any previous in-flight request
@@ -427,17 +287,9 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
         currentAbortController.abort();
     }
 
-    // Reset and configure progress queue
-    progressQueue.reset();
-    progressQueue.onDisplay = (message) => {
-        const substepEl = document.getElementById('loading-substep');
-        if (substepEl) {
-            substepEl.textContent = message;
-        }
-    };
-
     // Timeout handling - 10 minutes for local providers, 5 minutes for cloud
     let timeoutId = null;
+    let completed = false;
     currentAbortController = new AbortController();
     const isLocalProvider = state.config?.is_local_provider ?? false;
     const TIMEOUT_MS = isLocalProvider ? 600000 : 300000;  // 10 min vs 5 min
@@ -446,7 +298,6 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
         if (timeoutId) clearTimeout(timeoutId);
         timeoutId = setTimeout(() => {
             currentAbortController.abort();
-            progressQueue.reset();
             onError(new Error('Request timed out. Try selecting some filters to reduce the library size.'));
         }, TIMEOUT_MS);
     }
@@ -505,7 +356,7 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                         try {
                             const data = JSON.parse(currentData);
                             if (currentEvent === 'progress') {
-                                progressQueue.enqueue(data.step, data.message);
+                                onProgress(data);
                             } else if (currentEvent === 'narrative') {
                                 // Store narrative data in state
                                 state.playlistTitle = data.playlist_title || '';
@@ -525,17 +376,16 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                             } else if (currentEvent === 'complete') {
                                 console.log('[MediaSage] Complete event received, pending tracks:', state.pendingTracks?.length || 0);
                                 clearTimeoutHandler();
+                                completed = true;
                                 // Merge accumulated tracks into complete data
                                 const completeData = {
                                     ...data,
                                     tracks: state.pendingTracks || data.tracks || [],
                                 };
                                 state.pendingTracks = [];
-                                // Wait for queue to drain before completing
-                                progressQueue.markComplete(completeData, onComplete);
+                                onComplete(completeData);
                             } else if (currentEvent === 'error') {
                                 clearTimeoutHandler();
-                                progressQueue.reset();
                                 onError(new Error(data.message));
                             }
                         } catch (e) {
@@ -552,7 +402,7 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                         console.warn('[MediaSage] Stream ended with unparsed buffer:', buffer);
                     }
                     // iOS Safari fallback: if stream ended without complete event but we have tracks
-                    if (state.pendingTracks && state.pendingTracks.length > 0 && !progressQueue.completeData) {
+                    if (state.pendingTracks && state.pendingTracks.length > 0 && !completed) {
                         console.warn('[MediaSage] Stream ended without complete event, synthesizing completion with', state.pendingTracks.length, 'tracks');
                         const syntheticComplete = {
                             tracks: state.pendingTracks,
@@ -561,7 +411,7 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                             narrative: state.narrative || '',
                         };
                         state.pendingTracks = [];
-                        progressQueue.markComplete(syntheticComplete, onComplete);
+                        onComplete(syntheticComplete);
                     }
                     return;
                 }
@@ -569,7 +419,6 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                 processStream();
             }).catch(err => {
                 clearTimeoutHandler();
-                progressQueue.reset();
                 if (err.name !== 'AbortError') {
                     onError(err);
                 }
@@ -579,7 +428,6 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
         processStream();
     }).catch(err => {
         clearTimeoutHandler();
-        progressQueue.reset();
         if (err.name !== 'AbortError') {
             onError(err);
         }
@@ -640,17 +488,56 @@ async function triggerLibrarySync() {
 // UI Updates
 // =============================================================================
 
-const HASH_TO_VIEW = { 'make-playlist': 'create', 'settings': 'settings', 'recommend-album': 'recommend' };
-const VIEW_TO_HASH = { 'create': 'make-playlist', 'settings': 'settings', 'recommend': 'recommend-album' };
+const HASH_TO_VIEW = {
+    'home': 'home',
+    'playlist-prompt': 'create',
+    'playlist-seed': 'create',
+    'recommend-album': 'recommend',
+    'settings': 'settings',
+    // Backward compat
+    'make-playlist': 'create',
+};
+const HASH_TO_MODE = {
+    'playlist-prompt': 'prompt',
+    'playlist-seed': 'seed',
+    'make-playlist': 'prompt',
+};
+const VIEW_TO_HASH = {
+    'home': 'home',
+    'create': null,  // determined by mode
+    'recommend': 'recommend-album',
+    'settings': 'settings',
+};
 
-function viewFromHash() {
-    return HASH_TO_VIEW[location.hash.slice(1)] || 'create';
+function hashForCurrentState() {
+    if (state.view === 'create') {
+        return state.mode === 'seed' ? 'playlist-seed' : 'playlist-prompt';
+    }
+    return VIEW_TO_HASH[state.view] || 'home';
 }
 
-function navigateTo(view) {
-    if (state.view === view) return;
+function viewFromHash() {
+    const hash = location.hash.slice(1).split('/')[0]; // prefix-match for future deep links
+    return HASH_TO_VIEW[hash] || 'home';
+}
+
+function modeFromHash() {
+    const hash = location.hash.slice(1).split('/')[0];
+    return HASH_TO_MODE[hash] || 'prompt';
+}
+
+function navigateTo(view, mode) {
+    const viewChanged = state.view !== view;
+    const modeChanged = mode && state.mode !== mode;
+    if (!viewChanged && !modeChanged) return;
+    if (mode) state.mode = mode;
     state.view = view;
     updateView();
+    if (modeChanged) {
+        state.step = 'input';
+        updateMode();
+        updateStep();
+    }
     if (view === 'settings') {
         loadSettings();
     } else if (view === 'recommend') {
@@ -659,27 +546,38 @@ function navigateTo(view) {
 }
 
 function updateView() {
-    // Update nav buttons (class and ARIA state)
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-        const isActive = btn.dataset.view === state.view;
-        btn.classList.toggle('active', isActive);
-        btn.setAttribute('aria-current', isActive ? 'true' : 'false');
-    });
-
     // Update views
     document.querySelectorAll('.view').forEach(view => {
         view.classList.toggle('active', view.id === `${state.view}-view`);
     });
+
+    // Update nav active states
+    const trigger = document.querySelector('.nav-dropdown-trigger');
+    const isPlaylist = state.view === 'create';
+    trigger.classList.toggle('active', isPlaylist);
+
+    // Update dropdown checkmarks
+    document.querySelectorAll('.nav-dropdown-item').forEach(item => {
+        const hash = item.dataset.nav;
+        const isSelected = isPlaylist && (
+            (hash === 'playlist-prompt' && state.mode === 'prompt') ||
+            (hash === 'playlist-seed' && state.mode === 'seed')
+        );
+        item.querySelector('.nav-check').textContent = isSelected ? '\u2713' : '';
+        item.classList.toggle('selected', isSelected);
+    });
+
+    // Update flat nav buttons
+    document.querySelectorAll('.nav-btn[data-nav]').forEach(btn => {
+        const hash = btn.dataset.nav;
+        const isActive = (hash === 'recommend-album' && state.view === 'recommend') ||
+                         (hash === 'settings' && state.view === 'settings');
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-current', isActive ? 'true' : 'false');
+    });
 }
 
 function updateMode() {
-    // Update mode tabs (class and ARIA state)
-    document.querySelectorAll('.mode-tab').forEach(tab => {
-        const isActive = tab.dataset.mode === state.mode;
-        tab.classList.toggle('active', isActive);
-        tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-    });
-
     // Update step panels visibility
     const inputPrompt = document.getElementById('step-input-prompt');
     const inputSeed = document.getElementById('step-input-seed');
@@ -702,21 +600,25 @@ function updateMode() {
 
     // Renumber visible steps
     let stepNumber = 1;
-    document.querySelectorAll('.step').forEach(step => {
+    document.querySelectorAll('#playlist-steps .step').forEach(step => {
         if (!step.classList.contains('hidden')) {
-            step.querySelector('.step-number').textContent = stepNumber++;
+            step.querySelector('.step-circle').textContent = stepNumber++;
         }
     });
+
+    // Update first step label based on mode
+    const inputLabel = document.getElementById('step-label-input');
+    if (inputLabel) {
+        inputLabel.textContent = state.mode === 'seed' ? 'Seed' : 'Prompt';
+    }
 }
 
 function updateStep() {
     const isResults = state.step === 'results';
 
-    // Hide step progress and mode tabs on results step
-    const stepProgress = document.querySelector('.step-progress');
-    const modeTabs = document.querySelector('.mode-tabs');
+    // Hide step progress on results step
+    const stepProgress = document.getElementById('playlist-steps');
     if (stepProgress) stepProgress.style.display = isResults ? 'none' : '';
-    if (modeTabs) modeTabs.style.display = isResults ? 'none' : '';
 
     // Toggle wide layout for results
     const appEl = document.querySelector('.app');
@@ -730,7 +632,7 @@ function updateStep() {
     const steps = ['input', 'dimensions', 'filters', 'results'];
     const currentIndex = steps.indexOf(state.step);
 
-    document.querySelectorAll('.step').forEach((stepEl, index) => {
+    document.querySelectorAll('#playlist-steps .step').forEach((stepEl, index) => {
         const stepName = stepEl.dataset.step;
         const stepIndex = steps.indexOf(stepName);
         const isActive = stepName === state.step;
@@ -744,6 +646,11 @@ function updateStep() {
         } else {
             stepEl.removeAttribute('aria-current');
         }
+    });
+
+    // Update connectors
+    document.querySelectorAll('#playlist-steps .step-connector').forEach((connector, i) => {
+        connector.classList.toggle('completed', i < currentIndex);
     });
 
     // Update step panels
@@ -1674,11 +1581,9 @@ function setLoading(loading, message = 'Loading...', substeps = null) {
     const contentEl = overlay.querySelector('.loading-modal-content');
     if (substepEl) {
         if (loading) {
-            // Pre-measure the widest possible text to prevent layout shifts.
-            // Include explicit substeps AND the AI cycling messages since
-            // streaming progress bypasses the substeps parameter.
-            if (contentEl) {
-                const allTexts = [message, ...(substeps || []), ...progressQueue.aiMessages];
+            // Pre-measure the widest possible text to prevent layout shifts
+            if (contentEl && substeps && substeps.length > 0) {
+                const allTexts = [message, ...substeps];
                 substepEl.style.visibility = 'hidden';
                 let maxWidth = contentEl.offsetWidth;
                 for (const text of allTexts) {
@@ -2019,12 +1924,53 @@ async function handleRefreshLibrary() {
 // =============================================================================
 
 function setupEventListeners() {
-    // Navigation
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const hash = VIEW_TO_HASH[btn.dataset.view];
-            if (hash) location.hash = '#' + hash;
+    // Unified navigation via data-nav attributes (header nav + home cards)
+    document.querySelectorAll('[data-nav]').forEach(el => {
+        el.addEventListener('click', () => {
+            const hash = el.dataset.nav;
+            // Special case: clicking Recommend Album while already there
+            if (hash === 'recommend-album' && state.view === 'recommend') {
+                if (state.rec.step !== 'prompt' || state.rec.loading) {
+                    openRecRestartModal();
+                }
+                return;
+            }
+            location.hash = '#' + hash;
+            // Close dropdown if open
+            const dropdown = document.querySelector('.nav-dropdown');
+            dropdown?.classList.remove('open');
+            dropdown?.querySelector('.nav-dropdown-trigger')?.setAttribute('aria-expanded', 'false');
         });
+    });
+
+    // Dropdown toggle
+    document.querySelector('.nav-dropdown-trigger')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const dropdown = e.target.closest('.nav-dropdown');
+        const isOpen = dropdown.classList.contains('open');
+        dropdown.classList.toggle('open', !isOpen);
+        e.target.closest('.nav-dropdown-trigger').setAttribute('aria-expanded', !isOpen);
+    });
+
+    // Close dropdown on outside click
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.nav-dropdown')) {
+            const dropdown = document.querySelector('.nav-dropdown');
+            dropdown?.classList.remove('open');
+            dropdown?.querySelector('.nav-dropdown-trigger')?.setAttribute('aria-expanded', 'false');
+        }
+    });
+
+    // Close dropdown on Escape
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const dropdown = document.querySelector('.nav-dropdown');
+            if (dropdown?.classList.contains('open')) {
+                dropdown.classList.remove('open');
+                dropdown.querySelector('.nav-dropdown-trigger')?.setAttribute('aria-expanded', 'false');
+                dropdown.querySelector('.nav-dropdown-trigger')?.focus();
+            }
+        }
     });
 
     // Settings links in hints (use event delegation for dynamically inserted links)
@@ -2032,22 +1978,16 @@ function setupEventListeners() {
         const link = e.target.closest('.llm-required-hint a[data-view]');
         if (link) {
             e.preventDefault();
-            const hash = VIEW_TO_HASH[link.dataset.view];
+            const hash = link.dataset.view === 'settings' ? 'settings' : null;
             if (hash) location.hash = '#' + hash;
         }
     });
 
     // Hash-based routing for top-level views
-    window.addEventListener('hashchange', () => navigateTo(viewFromHash()));
-
-    // Mode tabs
-    document.querySelectorAll('.mode-tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            state.mode = tab.dataset.mode;
-            state.step = 'input';
-            updateMode();
-            updateStep();
-        });
+    window.addEventListener('hashchange', () => {
+        const view = viewFromHash();
+        const mode = modeFromHash();
+        navigateTo(view, mode);
     });
 
     // Prompt analysis
@@ -2279,6 +2219,7 @@ function setupEventListeners() {
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         const modals = [
+            { id: 'rec-restart-modal', dismiss: dismissRecRestartModal },
             { id: 'play-choice-modal', dismiss: dismissPlayChoice },
             { id: 'client-picker-modal', dismiss: dismissClientPicker },
             { id: 'play-success-modal', dismiss: dismissPlaySuccess },
@@ -2308,12 +2249,11 @@ async function handleAnalyzePrompt() {
     state.sessionTokens = 0;
     state.sessionCost = 0;
 
-    const analyzeSteps = [
-        'Parsing your request...',
-        'Identifying genres and eras...',
-        'Matching to your library...',
-    ];
-    setLoading(true, 'Analyzing your prompt...', analyzeSteps);
+    const stepLoader = showTimedStepLoading([
+        { id: 'parsing', text: 'Parsing your request...', status: 'active' },
+        { id: 'genres', text: 'Identifying genres and eras...', status: 'pending' },
+        { id: 'matching', text: 'Matching to your library...', status: 'pending' },
+    ]);
 
     try {
         const response = await analyzePrompt(prompt);
@@ -2334,7 +2274,7 @@ async function handleAnalyzePrompt() {
     } catch (error) {
         showError(error.message);
     } finally {
-        setLoading(false);
+        stepLoader.finish();
     }
 }
 
@@ -2408,12 +2348,11 @@ async function selectSeedTrack(ratingKey, tracks) {
     state.sessionTokens = 0;
     state.sessionCost = 0;
 
-    const analyzeTrackSteps = [
-        'Loading track metadata...',
-        'Analyzing musical characteristics...',
-        'Generating exploration dimensions...',
-    ];
-    setLoading(true, 'Analyzing track dimensions...', analyzeTrackSteps);
+    const stepLoader = showTimedStepLoading([
+        { id: 'metadata', text: 'Loading track metadata...', status: 'active' },
+        { id: 'analyzing', text: 'Analyzing musical characteristics...', status: 'pending' },
+        { id: 'dimensions', text: 'Generating exploration dimensions...', status: 'pending' },
+    ]);
 
     try {
         const response = await analyzeTrack(ratingKey);
@@ -2433,7 +2372,7 @@ async function selectSeedTrack(ratingKey, tracks) {
     } catch (error) {
         showError(error.message);
     } finally {
-        setLoading(false);
+        stepLoader.finish();
     }
 }
 
@@ -2542,19 +2481,20 @@ async function handleGenerate() {
         }
     }
 
-    setLoading(true, 'Generating playlist...');
-    const substepEl = document.getElementById('loading-substep');
+    showStepLoading(PLAYLIST_STEPS.map(s => ({ ...s })));
 
     generatePlaylistStream(
         request,
-        // onProgress
+        // onProgress — map SSE step to consolidated visible step
         (data) => {
-            if (substepEl && data.message) {
-                substepEl.textContent = data.message;
-            }
+            const mapped = PLAYLIST_STEP_MAP[data.step];
+            if (mapped) updateStepProgress(mapped);
         },
         // onComplete
         (response) => {
+            // Mark final step complete before hiding
+            updateStepProgress('__done__');
+
             // Add generation costs to session totals
             state.sessionTokens += response.token_count || 0;
             state.sessionCost += response.estimated_cost || 0;
@@ -2584,12 +2524,12 @@ async function handleGenerate() {
             updateStep();
             updatePlaylist();
             window.scrollTo(0, 0);
-            setLoading(false);
+            hideStepLoading();
         },
         // onError
         (error) => {
             showError(error.message);
-            setLoading(false);
+            hideStepLoading();
         }
     );
 }
@@ -2784,7 +2724,7 @@ function unlockScroll() {
 
 function removeNoScrollIfNoModals() {
     const openModal = document.querySelector(
-        '.modal-overlay:not(.hidden), .success-modal:not(.hidden), .sync-modal:not(.hidden), .bottom-sheet:not(.hidden), .loading-overlay:not(.hidden)'
+        '.modal-overlay:not(.hidden), .success-modal:not(.hidden), .sync-modal:not(.hidden), .bottom-sheet:not(.hidden), .loading-overlay:not(.hidden), .step-loading-overlay:not(.hidden)'
     );
     if (!openModal) {
         unlockScroll();
@@ -2815,6 +2755,20 @@ function dismissPlaySuccess() {
 
 function dismissUpdateSuccess() {
     const modal = document.getElementById('update-success-modal');
+    modal.classList.add('hidden');
+    removeNoScrollIfNoModals();
+    focusManager.closeModal(modal);
+}
+
+function openRecRestartModal() {
+    const modal = document.getElementById('rec-restart-modal');
+    modal.classList.remove('hidden');
+    lockScroll();
+    focusManager.openModal(modal);
+}
+
+function dismissRecRestartModal() {
+    const modal = document.getElementById('rec-restart-modal');
     modal.classList.add('hidden');
     removeNoScrollIfNoModals();
     focusManager.closeModal(modal);
@@ -3280,7 +3234,7 @@ async function initRecommendView() {
 
 function showRecSyncOverlay(status) {
     const overlay = document.getElementById('rec-sync-overlay');
-    const progress = document.querySelector('.rec-progress');
+    const progress = document.getElementById('rec-steps');
     const content = document.querySelector('.rec-step-content');
     if (!overlay) return;
 
@@ -3339,7 +3293,7 @@ function updateRecSyncProgress(syncProgress) {
 
 function hideRecSyncOverlay() {
     const overlay = document.getElementById('rec-sync-overlay');
-    const progress = document.querySelector('.rec-progress');
+    const progress = document.getElementById('rec-steps');
     const content = document.querySelector('.rec-step-content');
     if (overlay) overlay.classList.add('hidden');
     if (progress) progress.style.display = '';
@@ -3404,16 +3358,42 @@ function renderRecFilterChips() {
 function renderRecPromptPills() {
     const container = document.getElementById('rec-prompt-pills');
     if (!container) return;
-    // Pick 12 random prompts
+    const isMobile = window.matchMedia('(max-width: 767px)').matches;
+    const count = isMobile ? 3 : 4;
     const shuffled = [...EXAMPLE_PROMPTS].sort(() => Math.random() - 0.5);
-    const selected = shuffled.slice(0, 12);
+    const selected = shuffled.slice(0, count);
     container.innerHTML = selected.map(p =>
         `<button class="rec-prompt-pill">${escapeHtml(p)}</button>`
     ).join('');
+    // Hide shuffle button if pool is too small
+    const shuffleBtn = document.getElementById('rec-prompt-shuffle');
+    if (shuffleBtn) shuffleBtn.hidden = EXAMPLE_PROMPTS.length <= count;
+}
+
+function shuffleRecPills() {
+    const container = document.getElementById('rec-prompt-pills');
+    if (!container) return;
+    const isMobile = window.matchMedia('(max-width: 767px)').matches;
+    const count = isMobile ? 3 : 4;
+    const currentTexts = new Set(
+        [...container.querySelectorAll('.rec-prompt-pill')].map(p => p.textContent)
+    );
+    let pool = EXAMPLE_PROMPTS.filter(p => !currentTexts.has(p));
+    if (pool.length < count) pool = [...EXAMPLE_PROMPTS];
+    const shuffled = [...pool].sort(() => Math.random() - 0.5);
+    const selected = shuffled.slice(0, count);
+    const pills = container.querySelectorAll('.rec-prompt-pill');
+    pills.forEach(p => { p.style.opacity = '0'; });
+    setTimeout(() => {
+        pills.forEach((p, i) => {
+            if (i < selected.length) p.textContent = selected[i];
+        });
+        pills.forEach(p => { p.style.opacity = '1'; });
+    }, 150);
 }
 
 function updateRecStep() {
-    const steps = ['setup', 'prompt', 'questions', 'results'];
+    const steps = ['prompt', 'setup', 'questions', 'results'];
     const currentIndex = steps.indexOf(state.rec.step);
 
     // Update panels
@@ -3423,20 +3403,20 @@ function updateRecStep() {
     });
 
     // Update progress bar
-    document.querySelectorAll('.rec-step').forEach(stepEl => {
-        const stepName = stepEl.dataset.recStep;
+    document.querySelectorAll('#rec-steps .step').forEach(stepEl => {
+        const stepName = stepEl.dataset.step;
         const stepIndex = steps.indexOf(stepName);
         stepEl.classList.toggle('active', stepName === state.rec.step);
         stepEl.classList.toggle('completed', stepIndex < currentIndex);
     });
 
     // Update connectors
-    document.querySelectorAll('.rec-step-connector').forEach((connector, i) => {
+    document.querySelectorAll('#rec-steps .step-connector').forEach((connector, i) => {
         connector.classList.toggle('completed', i < currentIndex);
     });
 
     // Hide progress bar on results
-    const recProgress = document.querySelector('.rec-progress');
+    const recProgress = document.getElementById('rec-steps');
     if (recProgress) {
         recProgress.style.display = state.rec.step === 'results' ? 'none' : '';
     }
@@ -3478,6 +3458,51 @@ async function updateRecAlbumPreview() {
     }
 }
 
+async function handlePromptAnalysis() {
+    const prompt = document.getElementById('rec-prompt-input')?.value || '';
+    if (!prompt.trim()) {
+        showError('Please enter a prompt');
+        return;
+    }
+    state.rec.prompt = prompt;
+
+    const btn = document.getElementById('rec-prompt-next');
+    if (btn) btn.disabled = true;
+
+    const stepLoader = showTimedStepLoading([
+        { id: 'parsing', text: 'Parsing your request...', status: 'active' },
+        { id: 'genres', text: 'Identifying genres and eras...', status: 'pending' },
+        { id: 'filters', text: 'Setting up filters...', status: 'pending' },
+    ]);
+
+    const infoBanner = document.getElementById('rec-filter-info');
+
+    try {
+        const data = await apiCall('/recommend/analyze-prompt', {
+            method: 'POST',
+            body: JSON.stringify({
+                prompt: state.rec.prompt,
+                genres: state.availableGenres.map(g => g.name),
+                decades: state.availableDecades.map(d => d.name),
+            }),
+        });
+        state.rec.selectedGenres = data.genres || [];
+        state.rec.selectedDecades = data.decades || [];
+        if (infoBanner) infoBanner.classList.remove('hidden');
+    } catch (e) {
+        // Fallback: all included (empty = no filter)
+        state.rec.selectedGenres = state.availableGenres.map(g => g.name);
+        state.rec.selectedDecades = state.availableDecades.map(d => d.name);
+        if (infoBanner) infoBanner.classList.add('hidden');
+    } finally {
+        stepLoader.finish();
+        if (btn) btn.disabled = false;
+        renderRecFilterChips();
+        updateRecAlbumPreview();
+        setRecStep('setup');
+    }
+}
+
 async function handleRecQuestions() {
     if (!state.rec.prompt.trim()) {
         showError('Please enter a prompt');
@@ -3485,7 +3510,7 @@ async function handleRecQuestions() {
     }
 
     state.rec.loading = true;
-    showRecLoading([
+    const stepLoader = showTimedStepLoading([
         { id: 'analyzing', text: 'Analyzing your request...', status: 'active' },
         { id: 'questions', text: 'Crafting questions...', status: 'pending' },
     ]);
@@ -3507,13 +3532,12 @@ async function handleRecQuestions() {
         state.rec.answers = data.questions.map(() => null);
         state.rec.answerTexts = data.questions.map(() => '');
 
-        hideRecLoading();
         renderRecQuestions();
         setRecStep('questions');
     } catch (e) {
-        hideRecLoading();
         showError(e.message);
     } finally {
+        stepLoader.finish();
         state.rec.loading = false;
     }
 }
@@ -3542,7 +3566,7 @@ function renderRecQuestions() {
 
 async function handleRecSwitchToDiscovery() {
     state.rec.loading = true;
-    showRecLoading([
+    const stepLoader = showTimedStepLoading([
         { id: 'switching', text: 'Switching to discovery mode...', status: 'active' },
     ]);
 
@@ -3562,10 +3586,10 @@ async function handleRecSwitchToDiscovery() {
             b.setAttribute('aria-pressed', b.dataset.recMode === 'discovery' ? 'true' : 'false');
         });
 
-        hideRecLoading();
+        stepLoader.finish();
         handleRecGenerate();
     } catch (e) {
-        hideRecLoading();
+        stepLoader.finish();
         showError(e.message);
         state.rec.loading = false;
     }
@@ -3581,8 +3605,9 @@ async function handleRecGenerate() {
         { id: 'extracting_facts', text: 'Analyzing research sources...', status: 'pending' },
         { id: 'writing', text: 'Writing the pitch...', status: 'pending' },
         { id: 'validating', text: 'Fact-checking the pitch...', status: 'pending' },
+        { id: 'rewriting', text: 'Refining the pitch...', status: 'pending' },
     ];
-    showRecLoading(progressSteps);
+    showStepLoading(progressSteps);
 
     try {
         const response = await fetch('/api/recommend/generate', {
@@ -3627,11 +3652,11 @@ async function handleRecGenerate() {
                 if (line === '' && currentData) {
                     try {
                         const data = JSON.parse(currentData);
-                        if (currentEventType === 'error' && data.error) {
-                            throw new Error(data.error);
+                        if (currentEventType === 'error' && data.message) {
+                            throw new Error(data.message);
                         }
                         if (data.step) {
-                            updateRecProgress(data.step);
+                            updateStepProgress(data.step);
                         }
                         if (data.recommendations) {
                             state.rec.recommendations = data.recommendations;
@@ -3651,55 +3676,150 @@ async function handleRecGenerate() {
             }
         }
 
-        hideRecLoading();
+        hideStepLoading();
         renderRecResults();
         setRecStep('results');
     } catch (e) {
-        hideRecLoading();
+        hideStepLoading();
         showError(e.message);
     } finally {
         state.rec.loading = false;
     }
 }
 
-function showRecLoading(steps) {
-    const overlay = document.getElementById('rec-loading-overlay');
-    const list = document.getElementById('rec-progress-list');
-    if (!overlay || !list) return;
+// =============================================================================
+// Step-Based Loading Overlay (shared by playlist + album flows)
+// =============================================================================
 
-    list.innerHTML = steps.map(s => `
-        <div class="rec-progress-item ${s.status}" data-progress-id="${s.id}">
-            <div class="rec-progress-icon">
-                ${s.status === 'completed' ? '<span style="color:var(--success)">&#10003;</span>' :
-                  s.status === 'active' ? '<div class="rec-progress-spinner"></div>' :
-                  '<span style="color:var(--text-muted)">&#9675;</span>'}
-            </div>
-            <span class="rec-progress-text">${escapeHtml(s.text)}</span>
-        </div>
-    `).join('');
+/** Playlist generation: maps fine-grained SSE step IDs to consolidated visible steps */
+const PLAYLIST_STEP_MAP = {
+    fetching: 'preparing',
+    filtering: 'preparing',
+    preparing: 'preparing',
+    ai_working: 'ai_working',
+    parsing: 'matching',
+    matching: 'matching',
+    narrative: 'narrative',
+};
 
-    overlay.classList.remove('hidden');
+const PLAYLIST_STEPS = [
+    { id: 'preparing', text: 'Preparing your library...', status: 'active' },
+    { id: 'ai_working', text: 'AI is curating your playlist...', status: 'pending' },
+    { id: 'matching', text: 'Matching tracks to your library...', status: 'pending' },
+    { id: 'narrative', text: 'Writing playlist story...', status: 'pending' },
+];
+
+// --- Step timing: enforce minimum dwell per step so they don't flash by ---
+const _stepTiming = { lastStepTime: 0, queue: [], timer: null };
+const MIN_STEP_MS = 500;
+
+function _processStepQueue() {
+    if (_stepTiming.timer) return;
+    if (_stepTiming.queue.length === 0) return;
+
+    const elapsed = Date.now() - _stepTiming.lastStepTime;
+    if (elapsed < MIN_STEP_MS) {
+        _stepTiming.timer = setTimeout(() => {
+            _stepTiming.timer = null;
+            _processStepQueue();
+        }, MIN_STEP_MS - elapsed);
+        return;
+    }
+
+    const next = _stepTiming.queue.shift();
+    if (next.type === 'hide') {
+        _applyHideStepLoading();
+        _stepTiming.queue = [];
+    } else {
+        _applyStepUpdate(next.id);
+        _stepTiming.lastStepTime = Date.now();
+        if (_stepTiming.queue.length > 0) {
+            _processStepQueue();
+        }
+    }
 }
 
-function updateRecProgress(activeStep) {
-    const items = document.querySelectorAll('.rec-progress-item');
+function _applyStepUpdate(activeStep) {
+    const items = document.querySelectorAll('.step-progress-item');
     let foundActive = false;
     items.forEach(item => {
         const id = item.dataset.progressId;
         if (id === activeStep) {
             foundActive = true;
-            item.className = 'rec-progress-item active';
-            item.querySelector('.rec-progress-icon').innerHTML = '<div class="rec-progress-spinner"></div>';
+            item.className = 'step-progress-item active';
+            item.querySelector('.step-progress-icon').innerHTML = '<div class="step-progress-spinner"></div>';
         } else if (!foundActive) {
-            item.className = 'rec-progress-item completed';
-            item.querySelector('.rec-progress-icon').innerHTML = '<span style="color:var(--success)">&#10003;</span>';
+            item.className = 'step-progress-item completed';
+            item.querySelector('.step-progress-icon').innerHTML = '<span style="color:var(--success)">&#10003;</span>';
         }
     });
 }
 
-function hideRecLoading() {
-    const overlay = document.getElementById('rec-loading-overlay');
+function _applyHideStepLoading() {
+    const overlay = document.getElementById('step-loading-overlay');
     if (overlay) overlay.classList.add('hidden');
+    removeNoScrollIfNoModals();
+}
+
+// --- Public API ---
+
+function showTimedStepLoading(steps, intervalMs = 2000) {
+    showStepLoading(steps);
+    let stepIndex = 0;
+    const stepIds = steps.map(s => s.id);
+    const timerId = setInterval(() => {
+        stepIndex++;
+        if (stepIndex < stepIds.length) {
+            updateStepProgress(stepIds[stepIndex]);
+        } else {
+            clearInterval(timerId);
+        }
+    }, intervalMs);
+    return {
+        finish() {
+            clearInterval(timerId);
+            for (let i = stepIndex + 1; i < stepIds.length; i++) {
+                updateStepProgress(stepIds[i]);
+            }
+            hideStepLoading();
+        }
+    };
+}
+
+function showStepLoading(steps) {
+    const overlay = document.getElementById('step-loading-overlay');
+    const list = document.getElementById('step-progress-list');
+    if (!overlay || !list) return;
+
+    // Reset timing state for fresh overlay
+    _stepTiming.lastStepTime = Date.now();
+    _stepTiming.queue = [];
+    clearTimeout(_stepTiming.timer);
+    _stepTiming.timer = null;
+
+    list.innerHTML = steps.map(s => `
+        <div class="step-progress-item ${s.status}" data-progress-id="${s.id}">
+            <div class="step-progress-icon">
+                ${s.status === 'completed' ? '<span style="color:var(--success)">&#10003;</span>' :
+                  s.status === 'active' ? '<div class="step-progress-spinner"></div>' :
+                  '<span style="color:var(--text-muted)">&#9675;</span>'}
+            </div>
+            <span class="step-progress-text">${escapeHtml(s.text)}</span>
+        </div>
+    `).join('');
+
+    overlay.classList.remove('hidden');
+    lockScroll();
+}
+
+function updateStepProgress(activeStep) {
+    _stepTiming.queue.push({ type: 'step', id: activeStep });
+    _processStepQueue();
+}
+
+function hideStepLoading() {
+    _stepTiming.queue.push({ type: 'hide' });
+    _processStepQueue();
 }
 
 function renderRecResults() {
@@ -3749,11 +3869,11 @@ function renderRecResults() {
                         </div>` : ''}
                     <div class="rec-primary-actions">
                         ${primary.track_rating_keys?.length ? `
-                            <button class="btn btn-primary rec-play-btn" data-rating-keys="${primary.track_rating_keys.join(',')}">&#9654; Play Now</button>
-                            <button class="btn btn-secondary rec-save-btn" data-album="${escapeHtml(primary.album)}" data-artist="${escapeHtml(primary.artist)}" data-rating-keys="${primary.track_rating_keys.join(',')}" data-pitch="${escapeHtml(pitch.full_text || '')}">Save to Playlist</button>
+                            <button class="btn btn-primary rec-play-btn" data-rating-keys="${escapeHtml(primary.track_rating_keys.join(','))}">&#9654; Play Now</button>
+                            <button class="btn btn-secondary rec-save-btn" data-album="${escapeHtml(primary.album)}" data-artist="${escapeHtml(primary.artist)}" data-rating-keys="${escapeHtml(primary.track_rating_keys.join(','))}" data-pitch="${escapeHtml(pitch.full_text || '')}">Save to Playlist</button>
                         ` : ''}
                         <button class="rec-action-link" id="rec-show-another">Show me another</button>
-                        <button class="rec-action-link rec-action-link--subtle" id="rec-start-over">Start over</button>
+                        <button class="btn btn-secondary" id="rec-start-over">Start Over</button>
                     </div>
                 </div>
             </div>
@@ -3779,8 +3899,8 @@ function renderRecResults() {
                         <div class="rec-secondary-pitch">${escapeHtml(rec.pitch?.short_pitch || rec.pitch?.full_text || '')}</div>
                         ${rec.track_rating_keys?.length ? `
                             <div class="rec-secondary-actions">
-                                <button class="btn btn-secondary btn-sm rec-play-btn" data-rating-keys="${rec.track_rating_keys.join(',')}">&#9654; Play</button>
-                                <button class="btn btn-secondary btn-sm rec-save-btn" data-album="${escapeHtml(rec.album)}" data-artist="${escapeHtml(rec.artist)}" data-rating-keys="${rec.track_rating_keys.join(',')}" data-pitch="${escapeHtml(rec.pitch?.full_text || '')}">Save</button>
+                                <button class="btn btn-secondary btn-sm rec-play-btn" data-rating-keys="${escapeHtml(rec.track_rating_keys.join(','))}">&#9654; Play</button>
+                                <button class="btn btn-secondary btn-sm rec-save-btn" data-album="${escapeHtml(rec.album)}" data-artist="${escapeHtml(rec.artist)}" data-rating-keys="${escapeHtml(rec.track_rating_keys.join(','))}" data-pitch="${escapeHtml(rec.pitch?.full_text || '')}">Save</button>
                             </div>
                         ` : ''}
                     </div>
@@ -3809,8 +3929,11 @@ function renderRecResults() {
 }
 
 function resetRecState() {
-    state.rec.step = 'setup';
+    state.rec.step = 'prompt';
     state.rec.prompt = '';
+    state.rec.loading = false;
+    state.rec.selectedGenres = [];
+    state.rec.selectedDecades = [];
     state.rec.questions = [];
     state.rec.answers = [];
     state.rec.answerTexts = [];
@@ -3819,7 +3942,10 @@ function resetRecState() {
     state.rec.tokenCount = 0;
     state.rec.estimatedCost = 0;
     state.rec.researchWarning = null;
-    // Preserve mode and filter selections
+    // Preserve mode and familiarityPref; clear filter info banner
+    const infoBanner = document.getElementById('rec-filter-info');
+    if (infoBanner) infoBanner.classList.add('hidden');
+    renderRecFilterChips();
     updateRecStep();
 }
 
@@ -3867,7 +3993,7 @@ function setupRecEventListeners() {
     // Setup Next
     const setupNext = document.getElementById('rec-setup-next');
     if (setupNext) {
-        setupNext.addEventListener('click', () => setRecStep('prompt'));
+        setupNext.addEventListener('click', () => handleRecQuestions());
     }
 
     // Prompt pills
@@ -3881,12 +4007,17 @@ function setupRecEventListeners() {
         });
     }
 
+    // Shuffle button
+    const shuffleBtn = document.getElementById('rec-prompt-shuffle');
+    if (shuffleBtn) {
+        shuffleBtn.addEventListener('click', shuffleRecPills);
+    }
+
     // Prompt Next
     const promptNext = document.getElementById('rec-prompt-next');
     if (promptNext) {
         promptNext.addEventListener('click', () => {
-            state.rec.prompt = document.getElementById('rec-prompt-input')?.value || '';
-            handleRecQuestions();
+            handlePromptAnalysis();
         });
     }
 
@@ -3990,10 +4121,18 @@ function setupRecEventListeners() {
     }
 
     // Step progress bar navigation (click completed steps to go back)
-    document.querySelectorAll('.rec-step').forEach(stepEl => {
+    document.querySelectorAll('#playlist-steps .step').forEach(stepEl => {
         stepEl.addEventListener('click', () => {
             if (stepEl.classList.contains('completed')) {
-                setRecStep(stepEl.dataset.recStep);
+                state.step = stepEl.dataset.step;
+                updateStep();
+            }
+        });
+    });
+    document.querySelectorAll('#rec-steps .step').forEach(stepEl => {
+        stepEl.addEventListener('click', () => {
+            if (stepEl.classList.contains('completed')) {
+                setRecStep(stepEl.dataset.step);
             }
         });
     });
@@ -4018,6 +4157,15 @@ function setupRecEventListeners() {
             handleRecSwitchToDiscovery();
         }
     });
+
+    // Restart confirmation modal buttons
+    document.getElementById('rec-restart-confirm')?.addEventListener('click', () => {
+        dismissRecRestartModal();
+        hideStepLoading();
+        resetRecState();
+    });
+    document.getElementById('rec-restart-cancel')?.addEventListener('click', dismissRecRestartModal);
+    document.getElementById('rec-restart-cancel-x')?.addEventListener('click', dismissRecRestartModal);
 }
 
 function handleRecResultAction(e) {
@@ -4094,8 +4242,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
     setupRecEventListeners();
     state.view = viewFromHash();
+    state.mode = modeFromHash();
     if (!location.hash) {
-        history.replaceState(null, '', '#' + VIEW_TO_HASH[state.view]);
+        history.replaceState(null, '', '#home');
     }
     updateView();
     updateMode();

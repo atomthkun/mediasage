@@ -172,56 +172,194 @@ body {
     display: block;
 }
 
-/* Mode Tabs */
-.mode-tabs {
-    display: flex;
-    gap: var(--spacing-md);
-    margin-bottom: var(--spacing-lg);
+/* Nav Dropdown */
+.nav-dropdown {
+    position: relative;
 }
 
-.mode-tab {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--spacing-xs);
-    padding: var(--spacing-md);
-    background: var(--bg-secondary);
-    border: 2px solid transparent;
-    border-radius: var(--radius-lg);
+.nav-dropdown-trigger {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-family: var(--font-family);
+    font-size: var(--font-size-base);
+    padding: var(--spacing-sm) var(--spacing-md);
     cursor: pointer;
+    border-radius: var(--radius-md);
     transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
-.mode-tab:hover {
+.nav-dropdown-trigger:hover {
+    color: var(--text-primary);
     background: var(--bg-tertiary);
 }
 
-.mode-tab.active {
+.nav-dropdown-trigger.active {
+    color: var(--accent);
+    background: var(--bg-secondary);
+}
+
+.nav-chevron {
+    font-size: 0.6rem;
+    opacity: 0.6;
+    transition: transform var(--transition-fast);
+}
+
+.nav-dropdown.open .nav-chevron {
+    transform: rotate(180deg);
+}
+
+.nav-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 200px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.nav-dropdown.open .nav-dropdown-menu {
+    display: block;
+}
+
+.nav-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    width: 100%;
+    padding: 10px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-family);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background var(--transition-fast);
+    text-align: left;
+}
+
+.nav-dropdown-item:hover {
+    background: var(--bg-tertiary);
+}
+
+.nav-dropdown-item.selected {
+    color: var(--accent);
+}
+
+.nav-check {
+    width: 1rem;
+    text-align: center;
+    font-size: 0.75rem;
+    color: var(--accent);
+}
+
+/* Home Screen */
+.home-content {
+    padding: var(--spacing-xl) 0;
+    text-align: center;
+}
+
+.home-greeting {
+    font-size: var(--font-size-2xl);
+    font-weight: 700;
+    margin-bottom: var(--spacing-sm);
+}
+
+.home-subtitle {
+    font-size: var(--font-size-base);
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-xl);
+}
+
+.home-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-xl);
+}
+
+.home-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg) var(--spacing-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    text-align: center;
+    font-family: var(--font-family);
+    color: var(--text-primary);
+}
+
+.home-card:hover {
     border-color: var(--accent);
     background: var(--bg-tertiary);
 }
 
-.mode-icon {
-    font-size: var(--font-size-2xl);
+.home-card-icon {
+    font-size: 2rem;
+    margin-bottom: 12px;
 }
 
-.mode-label {
+.home-card-title {
     font-size: var(--font-size-sm);
-    color: var(--text-secondary);
+    font-weight: 600;
+    margin-bottom: 4px;
 }
 
-.mode-tab.active .mode-label {
-    color: var(--accent);
+.home-card-desc {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    line-height: 1.4;
 }
 
-/* Step Progress */
+.home-history {
+    text-align: left;
+}
+
+.home-history-header {
+    font-size: var(--font-size-sm);
+    color: var(--text-muted);
+    margin-bottom: var(--spacing-md);
+    font-weight: 400;
+}
+
+.home-history-placeholder {
+    background: var(--bg-secondary);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-xl);
+    text-align: center;
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+}
+
+/* Logo Link */
+.logo-link {
+    color: inherit;
+    text-decoration: none;
+}
+
+.logo-link:hover {
+    opacity: 0.85;
+}
+
+/* Step Progress (shared across playlist + recommend flows) */
 .step-progress {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    margin-bottom: var(--spacing-xl);
-    padding: 0 var(--spacing-md);
+    justify-content: center;
+    gap: 0;
+    padding: var(--spacing-lg) var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
 }
 
 .step {
@@ -229,47 +367,79 @@ body {
     flex-direction: column;
     align-items: center;
     gap: var(--spacing-xs);
+    cursor: pointer;
+    min-width: 60px;
 }
 
-.step-number {
+.step-circle {
     width: 32px;
     height: 32px;
+    border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-full);
     font-size: var(--font-size-sm);
     font-weight: 600;
+    background: var(--bg-tertiary);
     color: var(--text-muted);
-    transition: all var(--transition-fast);
+    border: 2px solid var(--border);
+    transition: all var(--transition-normal);
 }
 
-.step.active .step-number,
-.step.completed .step-number {
+.step.active .step-circle {
     background: var(--accent);
     color: var(--bg-primary);
+    border-color: var(--accent);
+}
+
+.step.completed .step-circle {
+    background: var(--accent);
+    color: var(--bg-primary);
+    border-color: var(--accent);
+    font-size: 0;
+}
+
+.step.completed .step-circle::after {
+    content: '\2713';
+    font-size: 14px;
 }
 
 .step-label {
-    font-size: var(--font-size-sm);
+    font-size: 0.75rem;
     color: var(--text-muted);
+    transition: color var(--transition-normal);
 }
 
-.step.active .step-label {
+.step.active .step-label,
+.step.completed .step-label {
     color: var(--text-primary);
 }
 
 .step-connector {
     flex: 1;
     height: 2px;
-    background: var(--bg-tertiary);
-    margin: 0 var(--spacing-sm);
+    background: var(--border);
+    min-width: 24px;
+    max-width: 60px;
+    margin: 0 var(--spacing-xs);
+    margin-bottom: 18px;
+    transition: background var(--transition-normal);
+}
+
+.step-connector.completed {
+    background: var(--accent);
 }
 
 /* Step Panels */
 .step-content {
     position: relative;
+    max-width: 640px;
+    margin: 0 auto;
+}
+
+/* Results step uses full app width (960px default, 1200px when app--wide) */
+.step-content:has(#step-results.active) {
+    max-width: none;
 }
 
 .step-panel {
@@ -2244,7 +2414,7 @@ body.no-scroll {
         min-height: 44px;
     }
 
-    .step-number {
+    .step-circle {
         width: 44px;
         height: 44px;
     }
@@ -2276,26 +2446,27 @@ body.no-scroll {
     }
 }
 
-/* Compact mobile overrides — narrower than touch-target query */
-@media (max-width: 600px) {
-    .mode-tabs {
-        gap: var(--spacing-sm);
-        margin-bottom: var(--spacing-md);
-    }
-
-    .mode-tab {
-        flex-direction: row;
-        justify-content: center;
-        gap: var(--spacing-sm);
-        padding: var(--spacing-sm) var(--spacing-md);
+@media (pointer: coarse) {
+    .nav-dropdown-trigger {
         min-height: 44px;
     }
+    .nav-dropdown-item {
+        min-height: 44px;
+    }
+}
 
-    .mode-icon {
-        font-size: var(--font-size-lg);
+/* Compact mobile overrides — narrower than touch-target query */
+@media (max-width: 600px) {
+    .home-cards {
+        grid-template-columns: 1fr;
     }
 
-    .step-number {
+    .nav-dropdown-trigger {
+        font-size: var(--font-size-sm);
+        padding: var(--spacing-sm);
+    }
+
+    .step-circle {
         width: 36px;
         height: 36px;
     }
@@ -2388,83 +2559,7 @@ body.no-scroll {
     color: var(--text-muted);
 }
 
-/* Step Progress Bar */
-.rec-progress {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0;
-    padding: var(--spacing-lg) var(--spacing-md);
-    margin-bottom: var(--spacing-lg);
-}
-
-.rec-step {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--spacing-xs);
-    cursor: pointer;
-    min-width: 60px;
-}
-
-.rec-step-circle {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: var(--font-size-sm);
-    font-weight: 600;
-    background: var(--bg-tertiary);
-    color: var(--text-muted);
-    border: 2px solid var(--border);
-    transition: all var(--transition-normal);
-}
-
-.rec-step.active .rec-step-circle {
-    background: var(--accent);
-    color: var(--bg-primary);
-    border-color: var(--accent);
-}
-
-.rec-step.completed .rec-step-circle {
-    background: var(--accent);
-    color: var(--bg-primary);
-    border-color: var(--accent);
-    font-size: 0;
-}
-
-.rec-step.completed .rec-step-circle::after {
-    content: '\2713';
-    font-size: 14px;
-}
-
-.rec-step-label {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    transition: color var(--transition-normal);
-}
-
-.rec-step.active .rec-step-label,
-.rec-step.completed .rec-step-label {
-    color: var(--text-primary);
-}
-
-.rec-step-connector {
-    flex: 1;
-    height: 2px;
-    background: var(--border);
-    min-width: 24px;
-    max-width: 60px;
-    margin: 0 var(--spacing-xs);
-    margin-bottom: 18px;
-    transition: background var(--transition-normal);
-}
-
-.rec-step-connector.completed {
-    background: var(--accent);
-}
+/* Rec step progress bar — now uses shared .step-progress rules above */
 
 /* Step Panels */
 .rec-step-content {
@@ -2543,36 +2638,26 @@ body.no-scroll {
     margin-bottom: var(--spacing-lg);
 }
 
+.rec-example-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-sm);
+}
+
 .rec-example-label {
     font-size: var(--font-size-sm);
     color: var(--text-muted);
-    margin-bottom: var(--spacing-sm);
 }
 
 .rec-prompt-pills {
     display: flex;
-    gap: var(--spacing-sm);
-    overflow-x: auto;
+    flex-wrap: wrap;
+    gap: 8px;
     padding-bottom: var(--spacing-sm);
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-}
-
-.rec-prompt-pills::-webkit-scrollbar {
-    height: 4px;
-}
-
-.rec-prompt-pills::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.rec-prompt-pills::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 2px;
 }
 
 .rec-prompt-pill {
-    flex-shrink: 0;
     padding: var(--spacing-xs) var(--spacing-md);
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
@@ -2589,6 +2674,54 @@ body.no-scroll {
     background: var(--bg-hover);
     color: var(--text-primary);
     border-color: var(--accent);
+}
+
+.rec-prompt-shuffle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    color: var(--text-muted);
+    font-size: 16px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.rec-prompt-shuffle:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
+    background: var(--bg-hover);
+}
+
+@media (max-width: 767px) {
+    .rec-prompt-pills {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+    }
+
+    .rec-prompt-pills::-webkit-scrollbar {
+        height: 4px;
+    }
+
+    .rec-prompt-pills::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .rec-prompt-pills::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 2px;
+    }
+
+    .rec-prompt-pill {
+        flex-shrink: 0;
+    }
 }
 
 /* Questions */
@@ -2676,35 +2809,40 @@ body.no-scroll {
     color: var(--text-secondary);
 }
 
-/* Loading Overlay (Recommend) */
-.rec-loading-overlay {
-    position: absolute;
-    inset: 0;
+/* Step-Based Loading Overlay (shared by playlist + album flows) */
+.step-loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
     background: rgba(26, 26, 26, 0.95);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 100;
-    border-radius: var(--radius-md);
+    z-index: 1000;
 }
 
-.rec-loading-overlay.hidden {
+.step-loading-overlay.hidden {
     display: none;
 }
 
-.rec-loading-content {
-    text-align: left;
-    max-width: 400px;
+.step-loading-content {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-lg);
     padding: var(--spacing-xl);
+    text-align: left;
+    min-width: 280px;
+    max-width: 400px;
 }
 
-.rec-progress-list {
+.step-progress-list {
     display: flex;
     flex-direction: column;
     gap: var(--spacing-md);
 }
 
-.rec-progress-item {
+.step-progress-item {
     display: flex;
     align-items: center;
     gap: var(--spacing-md);
@@ -2713,19 +2851,19 @@ body.no-scroll {
     transition: color var(--transition-normal);
 }
 
-.rec-progress-item.active {
+.step-progress-item.active {
     color: var(--text-primary);
 }
 
-.rec-progress-item.active .rec-progress-text {
-    animation: rec-pulse 2s ease-in-out infinite;
+.step-progress-item.active .step-progress-text {
+    animation: step-pulse 2s ease-in-out infinite;
 }
 
-.rec-progress-item.completed {
+.step-progress-item.completed {
     color: var(--success);
 }
 
-.rec-progress-icon {
+.step-progress-icon {
     width: 24px;
     height: 24px;
     display: flex;
@@ -2734,7 +2872,7 @@ body.no-scroll {
     flex-shrink: 0;
 }
 
-.rec-progress-spinner {
+.step-progress-spinner {
     width: 18px;
     height: 18px;
     border: 2px solid var(--border);
@@ -2743,7 +2881,7 @@ body.no-scroll {
     animation: spin 0.8s linear infinite;
 }
 
-@keyframes rec-pulse {
+@keyframes step-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
 }
@@ -3006,6 +3144,15 @@ body.no-scroll {
 }
 
 /* Familiarity hint */
+.rec-filter-info {
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+    font-style: italic;
+    margin-bottom: var(--spacing-md);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-left: 2px solid var(--accent);
+}
+
 .rec-familiarity-hint {
     color: var(--text-muted);
     font-size: var(--font-size-xs);
