@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from starlette.responses import StreamingResponse
 import httpx
 
@@ -16,6 +16,8 @@ from backend.config import get_config, update_config_values, ConfigSaveError
 from backend.version import get_version
 from backend.models import (
     AlbumPreviewResponse,
+    AnalyzePromptFiltersRequest,
+    AnalyzePromptFiltersResponse,
     AnalyzePromptRequest,
     AnalyzePromptResponse,
     AnalyzeTrackRequest,
@@ -745,7 +747,11 @@ def _get_pipeline():
     config = get_config()
     if _recommendation_pipeline is None or _recommendation_pipeline_llm is not llm_client:
         from backend.recommender import RecommendationPipeline
+        old_pipeline = _recommendation_pipeline
         _recommendation_pipeline = RecommendationPipeline(config, llm_client)
+        # Migrate active sessions from old pipeline to preserve in-flight requests
+        if old_pipeline is not None:
+            _recommendation_pipeline._sessions = old_pipeline._sessions
         _recommendation_pipeline_llm = llm_client
     return _recommendation_pipeline
 
@@ -810,6 +816,39 @@ async def recommend_albums_preview(
         estimated_input_tokens=estimated_input_tokens,
         estimated_cost=estimated_cost,
     )
+
+
+@app.post("/api/recommend/analyze-prompt", response_model=AnalyzePromptFiltersResponse)
+async def recommend_analyze_prompt(request: AnalyzePromptFiltersRequest) -> AnalyzePromptFiltersResponse:
+    """Analyze a prompt and suggest relevant genre/decade filters."""
+    pipeline = _get_pipeline()
+    if not pipeline:
+        # Fallback: return all available
+        return AnalyzePromptFiltersResponse(
+            genres=request.genres,
+            decades=request.decades,
+            reasoning="LLM not configured; returning all filters.",
+        )
+
+    try:
+        result = await asyncio.to_thread(
+            pipeline.analyze_prompt_filters,
+            request.prompt,
+            request.genres,
+            request.decades,
+        )
+        return AnalyzePromptFiltersResponse(
+            genres=result["genres"],
+            decades=result["decades"],
+            reasoning=result["reasoning"],
+        )
+    except Exception:
+        logger.exception("analyze-prompt failed, returning all filters")
+        return AnalyzePromptFiltersResponse(
+            genres=request.genres,
+            decades=request.decades,
+            reasoning="Analysis failed; returning all filters.",
+        )
 
 
 @app.post("/api/recommend/questions", response_model=RecommendQuestionsResponse)
@@ -921,8 +960,8 @@ async def recommend_switch_mode(request: RecommendSwitchModeRequest) -> Recommen
     if library_cache.has_cached_tracks():
         candidates_raw = await asyncio.to_thread(
             library_cache.get_album_candidates,
-            genres=old_session.filters.get("genres") or None if request.mode == "library" else None,
-            decades=old_session.filters.get("decades") or None if request.mode == "library" else None,
+            genres=(old_session.filters.get("genres") or None) if request.mode == "library" else None,
+            decades=(old_session.filters.get("decades") or None) if request.mode == "library" else None,
         )
         candidates = [AlbumCandidate(**c) for c in candidates_raw]
 
@@ -946,6 +985,7 @@ async def recommend_switch_mode(request: RecommendSwitchModeRequest) -> Recommen
         previously_recommended=old_session.previously_recommended,
     )
     new_session_id = pipeline.create_session(new_session)
+    pipeline.delete_session(request.session_id)  # Clean up old session
 
     return RecommendSwitchModeResponse(session_id=new_session_id)
 
@@ -964,9 +1004,10 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
     if not session:
         raise HTTPException(status_code=404, detail="Session not found or expired")
 
-    # Store answers in session
-    session.answers = request.answers
-    session.answer_texts = request.answer_texts
+    # Store answers in session (thread-safe)
+    pipeline.update_session_answers(
+        request.session_id, request.answers, request.answer_texts
+    )
 
     def _apply_year_override(rec, rd, log):
         """Override rec.year with MusicBrainz release_date year when available."""
@@ -1006,7 +1047,12 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 except Exception as e:
                     _logging.getLogger(__name__).warning("Familiarity query failed: %s", e)
 
-            if is_discovery and session.taste_profile:
+            if is_discovery:
+                if not session.taste_profile:
+                    raise ValueError(
+                        "Discovery mode requires a library profile. "
+                        "Please sync your library and start a new recommendation."
+                    )
                 recommendations = await asyncio.to_thread(
                     pipeline.select_discovery_albums,
                     prompt=session.prompt,
@@ -1050,6 +1096,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                             )
                             if not valid:
                                 _logging.getLogger(__name__).info("Primary discovery album failed validation")
+                                research_warning = "The primary recommendation could not be fully verified against available sources."
 
                         # Fetch cover art when missing (discovery mode or failed candidate lookup)
                         if not primary.art_url and rd.earliest_release_mbid:
@@ -1191,11 +1238,11 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
 
             # Record shown albums so "Show me another" won't repeat them.
             # Keep only the last 30 (10 rounds) so older picks rotate back in.
-            for rec in recommendations:
-                key = f"{rec.artist.lower()}|||{rec.album.lower()}"
-                if key not in session.previously_recommended:
-                    session.previously_recommended.append(key)
-            session.previously_recommended = session.previously_recommended[-30:]
+            new_keys = [
+                f"{rec.artist.lower()}|||{rec.album.lower()}"
+                for rec in recommendations
+            ]
+            pipeline.update_previously_recommended(request.session_id, new_keys)
 
             # Log cost summary
             cost_logger.info(
@@ -1209,7 +1256,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
         except Exception as e:
             import traceback
             traceback.print_exc()
-            error_data = _json.dumps({"error": str(e)})
+            error_data = _json.dumps({"message": str(e)})
             yield f"event: error\ndata: {error_data}\n\n"
 
     return StreamingResponse(
@@ -1291,8 +1338,12 @@ if frontend_path.exists():
 
 @app.get("/")
 async def serve_index():
-    """Serve the main index.html page."""
+    """Serve the main index.html page with cache-busted asset URLs."""
     index_path = frontend_path / "index.html"
     if index_path.exists():
-        return FileResponse(index_path)
+        html = index_path.read_text()
+        v = get_version()
+        html = html.replace("/static/style.css", f"/static/style.css?v={v}")
+        html = html.replace("/static/app.js", f"/static/app.js?v={v}")
+        return HTMLResponse(html)
     return {"message": "MediaSage API is running. Frontend not found."}
