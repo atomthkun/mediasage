@@ -186,6 +186,39 @@ class RecommendationPipeline:
             self._sessions[session_id] = (session_state, time.time())
             return session_state
 
+    def update_session_answers(
+        self, session_id: str, answers: list, answer_texts: list
+    ) -> None:
+        """Thread-safe update of session answers."""
+        with self._session_lock:
+            entry = self._sessions.get(session_id)
+            if entry:
+                session_state, _ = entry
+                session_state.answers = answers
+                session_state.answer_texts = answer_texts
+                self._sessions[session_id] = (session_state, time.time())
+
+    def update_previously_recommended(
+        self, session_id: str, new_keys: list[str]
+    ) -> None:
+        """Thread-safe update of previously recommended albums."""
+        with self._session_lock:
+            entry = self._sessions.get(session_id)
+            if entry:
+                session_state, _ = entry
+                for key in new_keys:
+                    if key not in session_state.previously_recommended:
+                        session_state.previously_recommended.append(key)
+                session_state.previously_recommended = (
+                    session_state.previously_recommended[-30:]
+                )
+                self._sessions[session_id] = (session_state, time.time())
+
+    def delete_session(self, session_id: str) -> None:
+        """Remove a session by ID."""
+        with self._session_lock:
+            self._sessions.pop(session_id, None)
+
     def _expire_old_sessions(self) -> None:
         """Remove sessions older than SESSION_EXPIRY. Caller must hold _session_lock."""
         now = time.time()
@@ -240,6 +273,60 @@ class RecommendationPipeline:
                     result.append(d["id"])
                     break
         return result[:2]
+
+    def analyze_prompt_filters(
+        self,
+        prompt: str,
+        available_genres: list[str],
+        available_decades: list[str],
+    ) -> dict:
+        """Analyze a prompt and suggest relevant genre/decade filters.
+
+        Returns dict with 'genres', 'decades', and 'reasoning' keys.
+        Validates against available lists; falls back to all-available if empty.
+        """
+        system = (
+            "You are a music librarian helping pre-select filters for an album recommendation.\n"
+            "Given a user's prompt, select which genres and decades from the available lists are RELEVANT.\n"
+            "Rules:\n"
+            "- Be inclusive but not indiscriminate.\n"
+            "- For vague/mood prompts: select broadly but exclude clearly irrelevant genres "
+            "(e.g., exclude Holiday for \"dark and heavy\").\n"
+            "- For specific genre/era prompts: select narrowly.\n"
+            "- When in doubt, include rather than exclude.\n"
+            "- If no time period mentioned: select ALL decades.\n"
+            "Return JSON: { \"genres\": [...], \"decades\": [...], \"reasoning\": \"...\" }"
+        )
+
+        user_prompt = (
+            f"User wants: \"{prompt}\"\n\n"
+            f"Available genres: {', '.join(available_genres)}\n\n"
+            f"Available decades: {', '.join(available_decades)}\n\n"
+            f"Which genres and decades are relevant?"
+        )
+
+        response = self.llm_client.generate(user_prompt, system)
+        self._log_cost("prompt_filter_analysis", response, "n/a")
+
+        raw = self.llm_client.parse_json_response(response)
+
+        # Validate against available lists
+        genre_set = set(available_genres)
+        decade_set = set(available_decades)
+        genres = [g for g in raw.get("genres", []) if g in genre_set]
+        decades = [d for d in raw.get("decades", []) if d in decade_set]
+
+        # Fallback: if empty, return all available
+        if not genres:
+            genres = list(available_genres)
+        if not decades:
+            decades = list(available_decades)
+
+        return {
+            "genres": genres,
+            "decades": decades,
+            "reasoning": raw.get("reasoning", ""),
+        }
 
     def generate_questions(
         self, prompt: str, dimension_ids: list[str], session_id: str
@@ -843,10 +930,11 @@ class RecommendationPipeline:
             f"Library size: {taste_profile.total_albums} albums"
         )
 
-        # Build exclusion list (sample to keep prompt size reasonable)
-        owned_sample = taste_profile.owned_albums[:200]
+        # Build exclusion list — send all owned albums so the LLM avoids them.
+        # At ~15 tokens per album, even 2000 albums is ~30K tokens (cheap).
+        # Post-filtering also catches any the LLM misses.
         exclusion_text = "\n".join(
-            f"- {a['artist']} — {a['album']}" for a in owned_sample
+            f"- {a['artist']} — {a['album']}" for a in taste_profile.owned_albums
         )
 
         # Build answer context
@@ -898,7 +986,23 @@ class RecommendationPipeline:
         raw = self.llm_client.parse_json_response(response)
         recommendations = []
 
+        # Build a set of owned albums for post-filtering (catches what the
+        # prompt-level sample of 200 misses in large libraries)
+        owned_set = {
+            f"{a['artist'].lower()}|||{a['album'].lower()}"
+            for a in taste_profile.owned_albums
+        }
+
         for item in raw[:3]:
+            # Skip albums the user already owns
+            rec_key = f"{item.get('artist', '').lower()}|||{item.get('album', '').lower()}"
+            if rec_key in owned_set:
+                logger.info(
+                    "Discovery post-filter: skipping owned album %s — %s",
+                    item.get("artist"), item.get("album"),
+                )
+                continue
+
             rank = item.get("rank", "secondary")
             rec = AlbumRecommendation(
                 rank=rank if rank in ("primary", "secondary") else "secondary",

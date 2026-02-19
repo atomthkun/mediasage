@@ -625,7 +625,7 @@ class TasteProfile(BaseModel):
 class RecommendSessionState(BaseModel):
     """Transient state maintained during a recommendation session."""
 
-    mode: str = "library"  # "library" or "discovery"
+    mode: Literal["library", "discovery"] = "library"
     prompt: str = ""
     filters: dict = {}
     questions: list[ClarifyingQuestion] = []
@@ -633,18 +633,34 @@ class RecommendSessionState(BaseModel):
     answer_texts: list[str] = []
     album_candidates: list[AlbumCandidate] = []
     taste_profile: TasteProfile | None = None
-    familiarity_pref: str = "any"  # "any" | "comfort" | "rediscover" | "hidden_gems"
+    familiarity_pref: Literal["any", "comfort", "rediscover", "hidden_gems"] = "any"
     previously_recommended: list[str] = []  # "artist|||album" keys shown in prior rounds
+
+
+class AnalyzePromptFiltersRequest(BaseModel):
+    """Request to analyze a prompt and suggest genre/decade filters."""
+
+    prompt: str
+    genres: list[str] = []
+    decades: list[str] = []
+
+
+class AnalyzePromptFiltersResponse(BaseModel):
+    """Response with suggested genre/decade pre-selections."""
+
+    genres: list[str] = []
+    decades: list[str] = []
+    reasoning: str = ""
 
 
 class RecommendQuestionsRequest(BaseModel):
     """Request to generate clarifying questions."""
 
     prompt: str
-    mode: str = "library"
+    mode: Literal["library", "discovery"] = "library"
     genres: list[str] = []
     decades: list[str] = []
-    familiarity_pref: str = "any"  # "any" | "comfort" | "rediscover" | "hidden_gems"
+    familiarity_pref: Literal["any", "comfort", "rediscover", "hidden_gems"] = "any"
 
 
 class RecommendQuestionsResponse(BaseModel):
@@ -660,7 +676,7 @@ class RecommendSwitchModeRequest(BaseModel):
     """Request to switch a recommendation session to a different mode."""
 
     session_id: str
-    mode: str  # "library" or "discovery"
+    mode: Literal["library", "discovery"]
 
 
 class RecommendSwitchModeResponse(BaseModel):
