@@ -528,6 +528,29 @@ def get_max_tracks_for_model(
     return max(100, max_tracks)  # Minimum 100 tracks
 
 
+def get_max_albums_for_model(
+    model: str, buffer_percent: float = 0.10, config: LLMConfig | None = None
+) -> int:
+    """Calculate max albums that can be sent to a model.
+
+    Args:
+        model: Model name
+        buffer_percent: Buffer to leave (default 10%)
+        config: Optional LLMConfig for local provider context window lookup
+
+    Returns:
+        Maximum number of albums (minimum 100)
+    """
+    context_limit = get_model_context_limit(model, config)
+    usable_tokens = int(context_limit * (1 - buffer_percent))
+
+    # Reserve ~1000 tokens for system prompt and output
+    available_for_albums = usable_tokens - 1000
+
+    max_albums = available_for_albums // TOKENS_PER_ALBUM
+    return max(100, max_albums)
+
+
 def get_model_context_limit(model: str, config: LLMConfig | None = None) -> int:
     """Get the context limit for a model in tokens.
 

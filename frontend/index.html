@@ -464,8 +464,16 @@
                                 <div id="rec-decade-chips" class="chip-container" role="group" aria-label="Decade filters"></div>
                             </div>
                         </div>
+                        <div class="filter-section">
+                            <h3>Max Albums to AI</h3>
+                            <p class="filter-hint">Limit how many albums are sent to the AI for selection.</p>
+                            <div class="album-limit-selector" role="group" aria-label="Maximum albums to send to AI">
+                                <!-- populated dynamically by updateAlbumLimitButtons() -->
+                            </div>
+                            <p id="rec-gemini-suggestion" class="filter-hint gemini-suggestion hidden"></p>
+                        </div>
                         <div id="rec-album-preview" class="rec-album-preview">
-                            <span id="rec-preview-count">-- albums</span>
+                            <span id="rec-preview-count" class="preview-stat">-- albums</span>
                             <span id="rec-preview-cost" class="preview-stat">Est. cost: --</span>
                         </div>
                         <div class="filter-section">
@@ -739,11 +747,6 @@
             <button class="toast-close" onclick="hideSuccess()" aria-label="Dismiss message">&times;</button>
         </div>
 
-        <!-- Undo Toast (history delete) -->
-        <div id="undo-toast" class="undo-toast hidden" role="status" aria-live="polite">
-            <span class="undo-toast-message">Removed from history</span>
-            <button id="undo-toast-btn" class="undo-toast-action">Undo</button>
-        </div>
 
         <!-- Footer -->
         <footer class="app-footer">

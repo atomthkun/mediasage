@@ -1,10 +1,14 @@
 """FastAPI application for MediaSage."""
 
 import asyncio
+import json
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+import re
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.staticfiles import StaticFiles
@@ -60,6 +64,7 @@ from backend.llm_client import (
     get_llm_client,
     init_llm_client,
     get_max_tracks_for_model,
+    get_max_albums_for_model,
     get_model_cost,
     estimate_cost_for_model,
     list_ollama_models,
@@ -99,15 +104,22 @@ async def lifespan(app: FastAPI):
     plex_client = get_plex_client()
     if library_cache.needs_resync() and plex_client and plex_client.is_connected():
         logger.info("Schema migration detected — starting automatic library re-sync")
-        asyncio.create_task(
-            asyncio.to_thread(library_cache.sync_library, plex_client)
-        )
+
+        async def _run_resync():
+            try:
+                await asyncio.to_thread(library_cache.sync_library, plex_client)
+            except Exception as e:
+                logger.error("Auto-resync failed: %s", e)
+
+        asyncio.create_task(_run_resync())
 
     yield
 
     # Shutdown: clean up resources
     if _music_research_client is not None:
         await _music_research_client.close()
+    if _art_proxy_client is not None:
+        await _art_proxy_client.aclose()
 
 
 app = FastAPI(
@@ -157,10 +169,11 @@ async def get_configuration() -> ConfigResponse:
     config = get_config()
     plex_client = get_plex_client()
 
-    # Calculate recommended max tracks based on generation model
+    # Calculate recommended max tracks/albums based on generation model
     generation_model = config.llm.model_generation
     analysis_model = config.llm.model_analysis
     max_tracks = get_max_tracks_for_model(generation_model, config=config.llm)
+    max_albums = get_max_albums_for_model(generation_model, config=config.llm)
 
     # Get cost rates for both models (for client-side cost calculation)
     # Local providers have zero cost
@@ -190,6 +203,7 @@ async def get_configuration() -> ConfigResponse:
         model_analysis=analysis_model,
         model_generation=generation_model,
         max_tracks_to_ai=max_tracks,
+        max_albums_to_ai=max_albums,
         cost_per_million_input=gen_costs["input"],
         cost_per_million_output=gen_costs["output"],
         analysis_cost_per_million_input=analysis_costs["input"],
@@ -236,10 +250,11 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
 
     plex_client = get_plex_client()
 
-    # Calculate recommended max tracks based on generation model
+    # Calculate recommended max tracks/albums based on generation model
     generation_model = config.llm.model_generation
     analysis_model = config.llm.model_analysis
     max_tracks = get_max_tracks_for_model(generation_model, config=config.llm)
+    max_albums = get_max_albums_for_model(generation_model, config=config.llm)
 
     # Get cost rates for both models (for client-side cost calculation)
     # Local providers have zero cost
@@ -269,6 +284,7 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
         model_analysis=analysis_model,
         model_generation=generation_model,
         max_tracks_to_ai=max_tracks,
+        max_albums_to_ai=max_albums,
         cost_per_million_input=gen_costs["input"],
         cost_per_million_output=gen_costs["output"],
         analysis_cost_per_million_input=analysis_costs["input"],
@@ -741,6 +757,10 @@ async def update_playlist(request: UpdatePlaylistRequest) -> UpdatePlaylistRespo
 _recommendation_pipeline = None
 _recommendation_pipeline_llm = None  # Track which LLM client the pipeline was built with
 _music_research_client = None
+_art_proxy_client: httpx.AsyncClient | None = None
+_art_proxy_lock = asyncio.Lock()
+_pipeline_lock = threading.Lock()
+_research_client_lock = threading.Lock()
 
 
 def _get_pipeline():
@@ -751,13 +771,16 @@ def _get_pipeline():
         return None
     config = get_config()
     if _recommendation_pipeline is None or _recommendation_pipeline_llm is not llm_client:
-        from backend.recommender import RecommendationPipeline
-        old_pipeline = _recommendation_pipeline
-        _recommendation_pipeline = RecommendationPipeline(config, llm_client)
-        # Migrate active sessions from old pipeline to preserve in-flight requests
-        if old_pipeline is not None:
-            _recommendation_pipeline._sessions = old_pipeline._sessions
-        _recommendation_pipeline_llm = llm_client
+        with _pipeline_lock:
+            # Double-check inside lock
+            if _recommendation_pipeline is None or _recommendation_pipeline_llm is not llm_client:
+                from backend.recommender import RecommendationPipeline
+                old_pipeline = _recommendation_pipeline
+                _recommendation_pipeline = RecommendationPipeline(config, llm_client)
+                # Migrate active sessions from old pipeline to preserve in-flight requests
+                if old_pipeline is not None:
+                    _recommendation_pipeline._sessions = old_pipeline._sessions
+                _recommendation_pipeline_llm = llm_client
     return _recommendation_pipeline
 
 
@@ -765,8 +788,10 @@ def _get_research_client():
     """Get or create the music research client."""
     global _music_research_client
     if _music_research_client is None:
-        from backend.music_research import MusicResearchClient
-        _music_research_client = MusicResearchClient()
+        with _research_client_lock:
+            if _music_research_client is None:
+                from backend.music_research import MusicResearchClient
+                _music_research_client = MusicResearchClient()
     return _music_research_client
 
 
@@ -774,6 +799,7 @@ def _get_research_client():
 async def recommend_albums_preview(
     genres: str | None = Query(None, description="Comma-separated genre names"),
     decades: str | None = Query(None, description="Comma-separated decade names"),
+    max_albums: int = Query(2500, description="Max albums to send to AI"),
 ) -> AlbumPreviewResponse:
     """Preview filtered album counts and cost estimates for recommendation."""
     from backend.llm_client import TOKENS_PER_ALBUM, estimate_cost_for_model
@@ -792,7 +818,7 @@ async def recommend_albums_preview(
     else:
         matching_albums = 0
 
-    albums_to_send = matching_albums
+    albums_to_send = min(matching_albums, max_albums) if max_albums > 0 else matching_albums
     config = get_config()
 
     # Estimate tokens for 4 LLM calls using hardcoded empirical constants
@@ -934,9 +960,6 @@ async def recommend_switch_mode(request: RecommendSwitchModeRequest) -> Recommen
 @app.post("/api/recommend/generate")
 async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResponse:
     """Generate album recommendations with SSE progress streaming."""
-    import json as _json
-    import logging as _logging
-
     pipeline = _get_pipeline()
     if not pipeline:
         raise HTTPException(status_code=503, detail="LLM not configured")
@@ -950,16 +973,13 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
         request.session_id, request.answers, request.answer_texts
     )
 
-    # Update session with mode/filters/familiarity from request
-    session.mode = request.mode
-    session.filters = {"genres": request.genres, "decades": request.decades}
-    session.familiarity_pref = request.familiarity_pref
-
-    # Load album candidates (moved here from /recommend/questions)
+    # Load album candidates and build state before locked session update
     from backend.models import AlbumCandidate
 
     genre_list = request.genres if request.genres else None
     decade_list = request.decades if request.decades else None
+    loaded_candidates = None
+    loaded_taste_profile = None
 
     if not library_cache.has_cached_tracks():
         if request.mode == "library":
@@ -987,7 +1007,11 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 )
             raise HTTPException(status_code=400, detail="No albums match your filters. Try broadening your genre or decade selection.")
 
-        session.album_candidates = [AlbumCandidate(**c) for c in candidates_raw]
+        loaded_candidates = [AlbumCandidate(**c) for c in candidates_raw]
+
+        # Cap albums sent to AI based on user-selected limit
+        if request.max_albums > 0 and len(loaded_candidates) > request.max_albums:
+            loaded_candidates = loaded_candidates[:request.max_albums]
 
         # Build taste profile for discovery mode
         if request.mode == "discovery":
@@ -995,7 +1019,23 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 library_cache.get_album_candidates, genres=None, decades=None
             )
             all_candidates = [AlbumCandidate(**c) for c in all_raw]
-            session.taste_profile = pipeline.build_taste_profile(all_candidates)
+            loaded_taste_profile = pipeline.build_taste_profile(all_candidates)
+
+    # Thread-safe session state update (all fields updated atomically under lock)
+    pipeline.update_session_generate_state(
+        request.session_id,
+        mode=request.mode,
+        filters={"genres": request.genres, "decades": request.decades},
+        familiarity_pref=request.familiarity_pref,
+        album_candidates=loaded_candidates,
+        taste_profile=loaded_taste_profile,
+    )
+
+    # Snapshot session fields before entering the generator to avoid TOCTOU
+    # races — a concurrent "Show me another" request could mutate the session
+    # while event_stream is still reading from it.
+    _prompt = session.prompt
+    _previously_recommended = list(session.previously_recommended) if session.previously_recommended else None
 
     def _apply_year_override(rec, rd, log):
         """Override rec.year with MusicBrainz release_date year when available."""
@@ -1014,57 +1054,63 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
     async def event_stream():
         research_warning = None
         research_data = {}
-        cost_logger = _logging.getLogger("recommend.cost")
+        cost_logger = logging.getLogger("recommend.cost")
 
         try:
-            is_discovery = session.mode == "discovery"
+            is_discovery = request.mode == "discovery"
             selecting_msg = "Finding albums to recommend..." if is_discovery else "Choosing albums from your library..."
 
             # Step 1: Select albums
-            yield f"event: progress\ndata: {_json.dumps({'step': 'selecting', 'message': selecting_msg})}\n\n"
+            yield f"event: progress\ndata: {json.dumps({'step': 'selecting', 'message': selecting_msg})}\n\n"
 
             # Query familiarity from cache if pref is not "any" (library mode only)
             familiarity_data = None
-            if session.familiarity_pref != "any" and not is_discovery:
+            if request.familiarity_pref != "any" and not is_discovery:
                 try:
-                    candidate_keys = [c.parent_rating_key for c in session.album_candidates if c.parent_rating_key]
+                    candidate_keys = [c.parent_rating_key for c in loaded_candidates if c.parent_rating_key]
                     if candidate_keys:
                         familiarity_data = await asyncio.to_thread(
                             library_cache.get_album_familiarity, candidate_keys
                         )
                 except Exception as e:
-                    _logging.getLogger(__name__).warning("Familiarity query failed: %s", e)
+                    logger.warning("Familiarity query failed: %s", e)
 
             if is_discovery:
-                if not session.taste_profile:
+                if not loaded_taste_profile:
                     raise ValueError(
                         "Discovery mode requires a library profile. "
                         "Please sync your library and start a new recommendation."
                     )
                 recommendations = await asyncio.to_thread(
                     pipeline.select_discovery_albums,
-                    prompt=session.prompt,
-                    answers=session.answers,
-                    answer_texts=session.answer_texts,
-                    taste_profile=session.taste_profile,
+                    prompt=_prompt,
+                    answers=request.answers,
+                    answer_texts=request.answer_texts,
+                    taste_profile=loaded_taste_profile,
                     session_id=request.session_id,
-                    previously_recommended=session.previously_recommended or None,
+                    previously_recommended=_previously_recommended,
                 )
             else:
                 recommendations = await asyncio.to_thread(
                     pipeline.select_albums,
-                    prompt=session.prompt,
-                    answers=session.answers,
-                    answer_texts=session.answer_texts,
-                    album_candidates=session.album_candidates,
+                    prompt=_prompt,
+                    answers=request.answers,
+                    answer_texts=request.answer_texts,
+                    album_candidates=loaded_candidates,
                     session_id=request.session_id,
-                    familiarity_pref=session.familiarity_pref,
+                    familiarity_pref=request.familiarity_pref,
                     familiarity_data=familiarity_data,
-                    previously_recommended=session.previously_recommended or None,
+                    previously_recommended=_previously_recommended,
+                )
+
+            if not recommendations:
+                raise ValueError(
+                    "No matching albums found. "
+                    "Try broadening your prompt or adjusting filters."
                 )
 
             # Step 2: Research primary album
-            yield f"event: progress\ndata: {_json.dumps({'step': 'researching_primary', 'message': 'Researching an album...'})}\n\n"
+            yield f"event: progress\ndata: {json.dumps({'step': 'researching_primary', 'message': 'Researching an album...'})}\n\n"
 
             research_client = _get_research_client()
             primary = next((r for r in recommendations if r.rank == "primary"), None)
@@ -1074,7 +1120,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                     if rd.musicbrainz_id:
                         research_data[f"{primary.artist}|||{primary.album}"] = rd
                         primary.research_available = True
-                        _apply_year_override(primary, rd, _logging.getLogger(__name__))
+                        _apply_year_override(primary, rd, logger)
 
                         # Discovery mode: validate against research
                         if is_discovery:
@@ -1083,7 +1129,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                                 primary, rd, session.prompt, request.session_id,
                             )
                             if not valid:
-                                _logging.getLogger(__name__).info("Primary discovery album failed validation")
+                                logger.info("Primary discovery album failed validation")
                                 research_warning = "The primary recommendation could not be fully verified against available sources."
 
                         # Fetch cover art when missing (discovery mode or failed candidate lookup)
@@ -1092,11 +1138,11 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                             if art_url:
                                 primary.art_url = art_url
                 except Exception as e:
-                    _logging.getLogger(__name__).warning("Primary research failed: %s", e)
+                    logger.warning("Primary research failed: %s", e)
                     research_warning = "Research was unavailable for the primary album — factual details could not be verified and may be approximate."
 
             # Step 3: Research secondary albums (light research)
-            yield f"event: progress\ndata: {_json.dumps({'step': 'researching_secondary', 'message': 'Looking up additional picks...'})}\n\n"
+            yield f"event: progress\ndata: {json.dumps({'step': 'researching_secondary', 'message': 'Looking up additional picks...'})}\n\n"
 
             secondaries = [r for r in recommendations if r.rank == "secondary"]
             for sec in secondaries:
@@ -1105,7 +1151,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                     if rd.musicbrainz_id:
                         research_data[f"{sec.artist}|||{sec.album}"] = rd
                         sec.research_available = True
-                        _apply_year_override(sec, rd, _logging.getLogger(__name__))
+                        _apply_year_override(sec, rd, logger)
 
                         # Fetch cover art when missing (discovery mode or failed candidate lookup)
                         if not sec.art_url and rd.earliest_release_mbid:
@@ -1113,15 +1159,14 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                             if art_url:
                                 sec.art_url = art_url
                 except Exception as e:
-                    _logging.getLogger(__name__).warning("Secondary research failed for %s: %s", sec.album, e)
+                    logger.warning("Secondary research failed for %s: %s", sec.album, e)
 
             # Step 3.5: Extract facts from research (primary album only)
             extracted_facts = {}
-            primary = next((r for r in recommendations if r.rank == "primary"), None)
             primary_key = f"{primary.artist}|||{primary.album}" if primary else None
 
             if primary_key and primary_key in research_data:
-                yield f"event: progress\ndata: {_json.dumps({'step': 'extracting_facts', 'message': 'Analyzing research sources...'})}\n\n"
+                yield f"event: progress\ndata: {json.dumps({'step': 'extracting_facts', 'message': 'Analyzing research sources...'})}\n\n"
 
                 try:
                     facts = await asyncio.to_thread(
@@ -1133,10 +1178,10 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                     )
                     extracted_facts[primary_key] = facts
                 except Exception as e:
-                    _logging.getLogger(__name__).warning("Fact extraction failed: %s", e)
+                    logger.warning("Fact extraction failed: %s", e)
 
             # Step 4: Write pitches (with research data, extracted facts, and familiarity)
-            yield f"event: progress\ndata: {_json.dumps({'step': 'writing', 'message': 'Writing the pitch...'})}\n\n"
+            yield f"event: progress\ndata: {json.dumps({'step': 'writing', 'message': 'Writing the pitch...'})}\n\n"
 
             recommendations = await asyncio.to_thread(
                 pipeline.write_pitches,
@@ -1153,7 +1198,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
 
             # Step 5: Validate primary pitch (only if we have extracted facts)
             if primary and primary_key and primary_key in extracted_facts:
-                yield f"event: progress\ndata: {_json.dumps({'step': 'validating', 'message': 'Fact-checking the pitch...'})}\n\n"
+                yield f"event: progress\ndata: {json.dumps({'step': 'validating', 'message': 'Fact-checking the pitch...'})}\n\n"
 
                 try:
                     validation = await asyncio.to_thread(
@@ -1164,11 +1209,11 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                     )
 
                     if not validation.valid:
-                        _logging.getLogger(__name__).info(
+                        logger.info(
                             "Pitch validation found %d issues, rewriting",
                             len(validation.issues),
                         )
-                        yield f"event: progress\ndata: {_json.dumps({'step': 'rewriting', 'message': 'Refining the pitch...'})}\n\n"
+                        yield f"event: progress\ndata: {json.dumps({'step': 'rewriting', 'message': 'Refining the pitch...'})}\n\n"
 
                         # Build answers string for rewrite
                         answer_parts = []
@@ -1199,7 +1244,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                         )
 
                         if not revalidation.valid:
-                            _logging.getLogger(__name__).warning(
+                            logger.warning(
                                 "Pitch still has %d issues after rewrite",
                                 len(revalidation.issues),
                             )
@@ -1209,17 +1254,18 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                                     "against available sources."
                                 )
                 except Exception as e:
-                    _logging.getLogger(__name__).warning("Pitch validation failed: %s", e)
+                    logger.warning("Pitch validation failed: %s", e)
 
             # Set research warning if no research was available at all
             if not research_data:
                 research_warning = "Research was unavailable — factual details could not be verified and may be approximate."
 
-            # Final result
+            # Final result — read accumulated costs from the pipeline session
+            total_tokens, total_cost = pipeline.get_session_costs(request.session_id)
             result = RecommendGenerateResponse(
                 recommendations=recommendations,
-                token_count=0,
-                estimated_cost=0.0,
+                token_count=total_tokens,
+                estimated_cost=total_cost,
                 research_warning=research_warning,
             )
 
@@ -1230,17 +1276,18 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 if primary_rec:
                     rec_title = f"{primary_rec.album} by {primary_rec.artist}"
                     rec_artist = primary_rec.artist
-                    rec_art_key = primary_rec.rating_key
-                    rec_subtitle = primary_rec.pitch.hook if primary_rec.pitch and primary_rec.pitch.hook else session.prompt
+                    rec_art_key = primary_rec.track_rating_keys[0] if primary_rec.track_rating_keys else None
+                    rec_subtitle = primary_rec.pitch.hook if primary_rec.pitch and primary_rec.pitch.hook else _prompt
                 else:
                     rec_title = "Album Recommendation"
                     rec_artist = None
                     rec_art_key = None
-                    rec_subtitle = session.prompt
-                rec_result_id = library_cache.save_result(
-                    type="album_recommendation",
+                    rec_subtitle = _prompt
+                rec_result_id = await asyncio.to_thread(
+                    library_cache.save_result,
+                    result_type="album_recommendation",
                     title=rec_title,
-                    prompt=session.prompt,
+                    prompt=_prompt,
                     snapshot=result.model_dump(mode="json"),
                     track_count=len(recommendations),
                     artist=rec_artist,
@@ -1248,13 +1295,13 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                     subtitle=rec_subtitle,
                 )
             except Exception as e:
-                _logging.getLogger(__name__).warning("Failed to save recommendation result: %s", e)
+                logger.warning("Failed to save recommendation result: %s", e)
 
             # Include result_id in the event payload
             result_payload = result.model_dump(mode="json")
             if rec_result_id:
                 result_payload["result_id"] = rec_result_id
-            yield f"event: result\ndata: {_json.dumps(result_payload)}\n\n"
+            yield f"event: result\ndata: {json.dumps(result_payload)}\n\n"
 
             # Record shown albums so "Show me another" won't repeat them.
             # Keep only the last 30 (10 rounds) so older picks rotate back in.
@@ -1274,9 +1321,12 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
             )
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            error_data = _json.dumps({"message": str(e)})
+            logger.exception("Recommendation generation failed")
+            # Send user-facing errors (ValueError) as-is; sanitize internal errors
+            if isinstance(e, ValueError):
+                error_data = json.dumps({"message": str(e)})
+            else:
+                error_data = json.dumps({"message": "An error occurred during recommendation generation. Please try again."})
             yield f"event: error\ndata: {error_data}\n\n"
 
     return StreamingResponse(
@@ -1303,7 +1353,7 @@ async def list_results(
 ) -> ResultListResponse:
     """List saved results for the history view."""
     results, total = await asyncio.to_thread(
-        library_cache.list_results, type=type, limit=limit, offset=offset
+        library_cache.list_results, result_type=type, limit=limit, offset=offset
     )
     return ResultListResponse(
         results=[ResultListItem(**r) for r in results],
@@ -1311,9 +1361,14 @@ async def list_results(
     )
 
 
+_RESULT_ID_RE = re.compile(r"^[0-9a-f]{8}$")
+
+
 @app.get("/api/results/{result_id}", response_model=ResultDetail)
 async def get_result(result_id: str) -> ResultDetail:
     """Fetch a single saved result with full snapshot."""
+    if not _RESULT_ID_RE.match(result_id):
+        raise HTTPException(status_code=400, detail="Invalid result ID format")
     result = await asyncio.to_thread(library_cache.get_result, result_id)
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
@@ -1323,6 +1378,8 @@ async def get_result(result_id: str) -> ResultDetail:
 @app.delete("/api/results/{result_id}", status_code=204)
 async def delete_result(result_id: str):
     """Delete a saved result."""
+    if not _RESULT_ID_RE.match(result_id):
+        raise HTTPException(status_code=400, detail="Invalid result ID format")
     deleted = await asyncio.to_thread(library_cache.delete_result, result_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Result not found")
@@ -1355,18 +1412,21 @@ async def get_album_art(rating_key: str):
     thumb_path = await asyncio.to_thread(plex_client.get_thumb_path, rating_key)
     if thumb_path:
         try:
+            global _art_proxy_client
+            if _art_proxy_client is None or _art_proxy_client.is_closed:
+                async with _art_proxy_lock:
+                    if _art_proxy_client is None or _art_proxy_client.is_closed:
+                        _art_proxy_client = httpx.AsyncClient(timeout=10.0)
             thumb_url = f"{config.plex.url}{thumb_path}"
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    thumb_url,
-                    headers={"X-Plex-Token": config.plex.token},
-                    timeout=10.0,
+            response = await _art_proxy_client.get(
+                thumb_url,
+                headers={"X-Plex-Token": config.plex.token},
+            )
+            if response.status_code == 200:
+                return Response(
+                    content=response.content,
+                    media_type=response.headers.get("content-type", "image/jpeg"),
                 )
-                if response.status_code == 200:
-                    return Response(
-                        content=response.content,
-                        media_type=response.headers.get("content-type", "image/jpeg"),
-                    )
         except Exception:
             pass
 

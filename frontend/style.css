@@ -695,8 +695,9 @@ textarea {
     color: var(--accent);
 }
 
-/* Track Limit Selector */
-.track-limit-selector {
+/* Track/Album Limit Selector */
+.track-limit-selector,
+.album-limit-selector {
     display: flex;
     gap: var(--spacing-sm);
     flex-wrap: wrap;
@@ -2633,12 +2634,19 @@ body.no-scroll {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: var(--spacing-sm) var(--spacing-md);
-    background: var(--bg-tertiary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
+    padding: var(--spacing-md);
     margin-bottom: var(--spacing-lg);
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
+}
+
+#rec-preview-count {
+    font-weight: 600;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
 }
 
 /* Example Prompts (shared: playlist + recommend) */
@@ -3338,6 +3346,23 @@ body.no-scroll {
     background: rgba(233, 92, 89, 0.1);
 }
 
+.history-card-delete.confirming {
+    opacity: 1;
+    color: #fff;
+    background: var(--error, #e53935);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    padding: 2px var(--spacing-sm);
+    min-width: 52px;
+    text-align: center;
+    animation: confirmPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes confirmPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
 /* Load More */
 .history-load-more {
     display: flex;
@@ -3373,52 +3398,6 @@ body.no-scroll {
     font-size: var(--font-size-sm);
 }
 
-/* Undo Toast */
-.undo-toast {
-    position: fixed;
-    bottom: var(--spacing-lg);
-    left: 50%;
-    transform: translateX(-50%) translateY(120%);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: var(--spacing-sm) var(--spacing-lg);
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-md);
-    z-index: 1000;
-    transition: transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-}
-
-.undo-toast.hidden {
-    /* keep offscreen via transform, not display:none, so transition works */
-}
-
-.undo-toast.visible {
-    transform: translateX(-50%) translateY(0);
-}
-
-.undo-toast-message {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-}
-
-.undo-toast-action {
-    background: none;
-    border: none;
-    color: var(--accent);
-    font-family: var(--font-family);
-    font-size: var(--font-size-sm);
-    font-weight: 600;
-    cursor: pointer;
-    padding: 0;
-    transition: color var(--transition-fast);
-}
-
-.undo-toast-action:hover {
-    color: var(--accent-hover);
-}
 
 /* Staggered entrance animation */
 @keyframes cardSlideIn {

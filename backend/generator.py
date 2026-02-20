@@ -358,7 +358,7 @@ def generate_playlist_stream(
             else:
                 result_subtitle = f"{len(matched_tracks)} tracks"
             result_id = library_cache.save_result(
-                type=result_type,
+                result_type=result_type,
                 title=result_title,
                 prompt=prompt or "",
                 snapshot=result.model_dump(mode="json"),

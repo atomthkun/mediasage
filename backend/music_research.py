@@ -5,12 +5,15 @@ release dates, personnel, recording context, and critical reception.
 """
 
 import asyncio
+import ipaddress
 import logging
 import re
+import socket
 import time
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 import httpx
+from readability import Document as ReadableDocument
 
 from backend.models import ResearchData
 
@@ -27,6 +30,25 @@ WIKIPEDIA_API = "https://en.wikipedia.org/api/rest_v1/page/summary"
 COVER_ART_BASE = "https://coverartarchive.org"
 
 
+def _is_safe_url(url: str) -> bool:
+    """Validate that a URL is safe to fetch (not a private/internal address)."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        # Resolve hostname to check for private IPs
+        for info in socket.getaddrinfo(hostname, None, socket.AF_UNSPEC):
+            addr = info[4][0]
+            if ipaddress.ip_address(addr).is_private:
+                return False
+        return True
+    except (ValueError, socket.gaierror):
+        return False
+
+
 class MusicResearchClient:
     """Client for fetching album research data from MusicBrainz and Wikipedia."""
 
@@ -36,12 +58,14 @@ class MusicResearchClient:
         self._rate_lock = asyncio.Lock()
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Lazily create the HTTP client."""
+        """Lazily create the HTTP client (guarded by rate lock)."""
         if self._http is None or self._http.is_closed:
-            self._http = httpx.AsyncClient(
-                timeout=10.0,
-                headers={"User-Agent": USER_AGENT},
-            )
+            async with self._rate_lock:
+                if self._http is None or self._http.is_closed:
+                    self._http = httpx.AsyncClient(
+                        timeout=10.0,
+                        headers={"User-Agent": USER_AGENT},
+                    )
         return self._http
 
     async def _rate_limit(self) -> None:
@@ -173,7 +197,10 @@ class MusicResearchClient:
             if artist_lower:
                 for credit in rg.get("artist-credit", []):
                     credit_name = credit.get("name", "").lower()
-                    if artist_lower == credit_name or artist_lower in credit_name:
+                    if artist_lower == credit_name or (
+                        len(credit_name) >= 3
+                        and (artist_lower in credit_name or credit_name in artist_lower)
+                    ):
                         score += 60
                         break
 
@@ -395,14 +422,18 @@ class MusicResearchClient:
             logger.info("Skipping AllMusic URL (TOS): %s", url)
             return None
 
+        # SSRF protection: reject private/internal URLs
+        if not _is_safe_url(url):
+            logger.warning("Rejecting unsafe review URL: %s", url)
+            return None
+
         client = await self._get_client()
 
         try:
             resp = await client.get(url, follow_redirects=True)
             resp.raise_for_status()
 
-            from readability import Document
-            doc = Document(resp.text)
+            doc = ReadableDocument(resp.text)
             # Get readable HTML, then strip tags for plain text
             readable_html = doc.summary()
 

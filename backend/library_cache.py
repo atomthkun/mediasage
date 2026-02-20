@@ -294,10 +294,10 @@ def get_tracks_by_filters(
             decade_conditions = []
             for decade in decades:
                 # Convert "1990s" to year range
-                if decade.endswith("s"):
-                    start_year = int(decade[:-1])
-                else:
-                    start_year = int(decade)
+                try:
+                    start_year = int(decade.rstrip("s"))
+                except ValueError:
+                    continue
                 end_year = start_year + 9
                 decade_conditions.append("(year >= ? AND year <= ?)")
                 params.extend([start_year, end_year])
@@ -622,10 +622,10 @@ def count_tracks_by_filters(
         if decades:
             decade_conditions = []
             for decade in decades:
-                if decade.endswith("s"):
-                    start_year = int(decade[:-1])
-                else:
-                    start_year = int(decade)
+                try:
+                    start_year = int(decade.rstrip("s"))
+                except ValueError:
+                    continue
                 end_year = start_year + 9
                 decade_conditions.append("(year >= ? AND year <= ?)")
                 params.extend([start_year, end_year])
@@ -702,10 +702,10 @@ def get_album_candidates(
         if decades:
             decade_conditions = []
             for decade in decades:
-                if decade.endswith("s"):
-                    start_year = int(decade[:-1])
-                else:
-                    start_year = int(decade)
+                try:
+                    start_year = int(decade.rstrip("s"))
+                except ValueError:
+                    continue
                 end_year = start_year + 9
                 decade_conditions.append("(year >= ? AND year <= ?)")
                 params.extend([start_year, end_year])
@@ -884,7 +884,7 @@ def get_album_familiarity(
 
 
 def save_result(
-    type: str,
+    result_type: str,
     title: str,
     prompt: str,
     snapshot: dict,
@@ -896,7 +896,7 @@ def save_result(
     """Save a generated result and return its unique ID.
 
     Args:
-        type: "prompt_playlist", "seed_playlist", or "album_recommendation"
+        result_type: "prompt_playlist", "seed_playlist", or "album_recommendation"
         title: Display title for the result
         prompt: Original user prompt
         snapshot: Full serialized response (GenerateResponse or RecommendGenerateResponse)
@@ -910,24 +910,21 @@ def save_result(
     """
     conn = ensure_db_initialized()
     try:
-        # Generate collision-resistant ID
+        # Generate collision-resistant ID with INSERT OR IGNORE to handle
+        # concurrent inserts that race past the existence check.
         for _ in range(10):
             result_id = secrets.token_hex(4)
-            existing = conn.execute(
-                "SELECT 1 FROM results WHERE id = ?", (result_id,)
-            ).fetchone()
-            if not existing:
+            cursor = conn.execute(
+                """INSERT OR IGNORE INTO results (id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (result_id, result_type, title, prompt, json.dumps(snapshot), track_count, artist, art_rating_key, subtitle),
+            )
+            if cursor.rowcount > 0:
                 break
         else:
-            raise RuntimeError("Failed to generate unique result ID")
-
-        conn.execute(
-            """INSERT INTO results (id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (result_id, type, title, prompt, json.dumps(snapshot), track_count, artist, art_rating_key, subtitle),
-        )
+            raise RuntimeError("Failed to generate unique result ID after 10 attempts")
         conn.commit()
-        logger.info("Saved result %s (type=%s, tracks=%d)", result_id, type, track_count)
+        logger.info("Saved result %s (type=%s, tracks=%d)", result_id, result_type, track_count)
         return result_id
     finally:
         conn.close()
@@ -964,14 +961,14 @@ def get_result(result_id: str) -> dict[str, Any] | None:
 
 
 def list_results(
-    type: str | None = None,
+    result_type: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
     """List results ordered by created_at DESC, without snapshots.
 
     Args:
-        type: Optional type filter (can be comma-separated for multiple)
+        result_type: Optional type filter (can be comma-separated for multiple)
         limit: Max results to return
         offset: Pagination offset
 
@@ -983,8 +980,8 @@ def list_results(
         where_clause = ""
         params: list[Any] = []
 
-        if type:
-            types = [t.strip() for t in type.split(",") if t.strip()]
+        if result_type:
+            types = [t.strip() for t in result_type.split(",") if t.strip()]
             placeholders = ",".join("?" for _ in types)
             where_clause = f"WHERE type IN ({placeholders})"
             params = types

@@ -151,6 +151,8 @@ const state = {
         tokenCount: 0,
         estimatedCost: 0,
         researchWarning: null,
+        resultId: null,
+        maxAlbumsToAI: 2500,
         loading: false,
         filterAnalysisPromise: null,
     },
@@ -618,8 +620,7 @@ async function loadSavedResult(resultId) {
 /** In-memory cache of history items + pagination metadata */
 let _historyCache = { items: [], total: 0, loaded: false, stale: true };
 let _historyFilter = 'all'; // 'all' | 'playlists' | 'albums'
-let _historyPendingDelete = null;
-let _historyUndoTimeout = null;
+let _historyDeleteConfirm = null; // { id, el, timeout }
 
 /** Mark history as needing re-fetch (called after a result is saved) */
 function markHistoryStale() {
@@ -826,46 +827,41 @@ function handleHistoryFilterClick(filter) {
     renderHistoryFeedFromCache();
 }
 
-/** Handle delete with undo */
-function handleHistoryDelete(resultId, cardEl) {
-    const undoToast = document.getElementById('undo-toast');
-    const undoBtn = document.getElementById('undo-toast-btn');
+/** Reset a delete button from confirming state back to × */
+function resetDeleteConfirm() {
+    if (!_historyDeleteConfirm) return;
+    clearTimeout(_historyDeleteConfirm.timeout);
+    const btn = _historyDeleteConfirm.el;
+    btn.classList.remove('confirming');
+    btn.textContent = '×';
+    btn.setAttribute('aria-label', 'Delete');
+    _historyDeleteConfirm = null;
+}
 
-    // Finalize any previous pending delete
-    if (_historyPendingDelete) {
-        finalizeHistoryDelete(_historyPendingDelete.id);
+/** Handle two-step inline delete confirmation */
+function handleHistoryDelete(resultId, deleteBtn) {
+    // If this button is already confirming → execute the delete
+    if (_historyDeleteConfirm && _historyDeleteConfirm.id === resultId) {
+        resetDeleteConfirm();
+        finalizeHistoryDelete(resultId);
+        return;
     }
 
-    // Hide the card
-    cardEl.style.display = 'none';
-    _historyPendingDelete = { id: resultId, el: cardEl };
+    // Reset any other card's confirming state
+    resetDeleteConfirm();
 
-    // Update date group header visibility
-    updateDateGroupVisibility();
+    // Enter confirming state on this button
+    deleteBtn.classList.add('confirming');
+    deleteBtn.textContent = 'Delete?';
+    deleteBtn.setAttribute('aria-label', 'Confirm delete');
 
-    // Show undo toast
-    undoToast.classList.add('visible');
-
-    clearTimeout(_historyUndoTimeout);
-    _historyUndoTimeout = setTimeout(() => {
-        if (_historyPendingDelete && _historyPendingDelete.id === resultId) {
-            finalizeHistoryDelete(resultId);
+    const timeout = setTimeout(() => {
+        if (_historyDeleteConfirm && _historyDeleteConfirm.id === resultId) {
+            resetDeleteConfirm();
         }
-        undoToast.classList.remove('visible');
-    }, 5000);
+    }, 3000);
 
-    // Set up undo handler (replace previous)
-    const newUndoBtn = undoBtn.cloneNode(true);
-    undoBtn.parentNode.replaceChild(newUndoBtn, undoBtn);
-    newUndoBtn.addEventListener('click', () => {
-        if (_historyPendingDelete && _historyPendingDelete.id === resultId) {
-            _historyPendingDelete.el.style.display = 'flex';
-            _historyPendingDelete = null;
-            updateDateGroupVisibility();
-        }
-        clearTimeout(_historyUndoTimeout);
-        undoToast.classList.remove('visible');
-    });
+    _historyDeleteConfirm = { id: resultId, el: deleteBtn, timeout };
 }
 
 /** Actually delete the result via API and remove from cache */
@@ -873,30 +869,12 @@ function finalizeHistoryDelete(resultId) {
     fetch(`/api/results/${encodeURIComponent(resultId)}`, { method: 'DELETE' }).catch(() => {});
     _historyCache.items = _historyCache.items.filter(i => i.id !== resultId);
     _historyCache.total = Math.max(0, _historyCache.total - 1);
-    _historyPendingDelete = null;
+    _historyDeleteConfirm = null;
 
     // Re-render to clean up DOM
     renderHistoryFeedFromCache();
 }
 
-/** Show/hide date group headers based on whether they have visible cards */
-function updateDateGroupVisibility() {
-    const container = document.getElementById('history-feed');
-    if (!container) return;
-    const headers = container.querySelectorAll('.date-group-header');
-    headers.forEach(header => {
-        let next = header.nextElementSibling;
-        let hasVisible = false;
-        while (next && !next.classList.contains('date-group-header') && !next.classList.contains('history-load-more')) {
-            if (next.classList.contains('history-card') && next.style.display !== 'none') {
-                hasVisible = true;
-                break;
-            }
-            next = next.nextElementSibling;
-        }
-        header.style.display = hasVisible ? '' : 'none';
-    });
-}
 
 /** Set up event delegation for history feed clicks */
 function setupHistoryEventListeners() {
@@ -911,12 +889,12 @@ function setupHistoryEventListeners() {
             return;
         }
 
-        // Delete button
+        // Delete button (two-step confirm)
         const deleteBtn = e.target.closest('.history-card-delete');
         if (deleteBtn) {
             e.stopPropagation();
             const card = deleteBtn.closest('.history-card');
-            if (card) handleHistoryDelete(card.dataset.resultId, card);
+            if (card) handleHistoryDelete(card.dataset.resultId, deleteBtn);
             return;
         }
 
@@ -1232,6 +1210,75 @@ function updateTrackLimitButtons() {
             recalculateCostDisplay();
         });
     });
+}
+
+function updateAlbumLimitButtons() {
+    const container = document.querySelector('.album-limit-selector');
+    if (!container || !state.config) return;
+
+    updateRecModelSuggestion();
+
+    const maxAllowed = state.config.max_albums_to_ai || 2500;
+
+    // Generate options filtered by model capacity
+    const options = [];
+    const standardOptions = [1000, 2500, 5000, 10000, 35000];
+    for (const opt of standardOptions) {
+        if (opt <= maxAllowed) {
+            options.push(opt);
+        }
+    }
+
+    // Add "Max" option (uses model's max)
+    options.push(0);
+
+    // Render buttons
+    container.innerHTML = options.map(limit => {
+        const isActive = limit === state.rec.maxAlbumsToAI ||
+            (limit === 0 && state.rec.maxAlbumsToAI >= maxAllowed);
+        const label = limit === 0 ? `Max (${maxAllowed.toLocaleString()})` : limit.toLocaleString();
+        return `<button class="limit-btn ${isActive ? 'active' : ''}" data-limit="${limit}">${label}</button>`;
+    }).join('');
+
+    // Clamp current selection to what the model supports
+    if (state.rec.maxAlbumsToAI > maxAllowed) {
+        state.rec.maxAlbumsToAI = maxAllowed;
+    }
+
+    // Re-attach event listeners
+    container.querySelectorAll('.limit-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            container.querySelectorAll('.limit-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            const limit = parseInt(btn.dataset.limit);
+            state.rec.maxAlbumsToAI = limit === 0 ? maxAllowed : limit;
+            updateRecAlbumPreview();
+        });
+    });
+}
+
+function updateRecModelSuggestion() {
+    const suggestion = document.getElementById('rec-gemini-suggestion');
+    if (!suggestion || !state.config) return;
+
+    const provider = state.config.llm_provider;
+    const maxAlbums = state.config.max_albums_to_ai || 2500;
+    const isLocalProvider = state.config.is_local_provider;
+
+    const ANTHROPIC_MAX_ALBUMS = 7100;
+    const GEMINI_MAX_ALBUMS = 35900;
+
+    if (isLocalProvider && maxAlbums < ANTHROPIC_MAX_ALBUMS) {
+        suggestion.textContent = 'Switch to a model with a larger context window in Settings for higher album limits.';
+        suggestion.classList.remove('hidden');
+    } else if (!isLocalProvider && provider !== 'gemini') {
+        const multiplier = provider === 'openai' ? '8x' : '5x';
+        suggestion.textContent = `Switch to Gemini in Settings for ${multiplier} higher album limits.`;
+        suggestion.classList.remove('hidden');
+    } else {
+        suggestion.classList.add('hidden');
+    }
 }
 
 // AbortController for cancelling in-flight filter preview requests
@@ -3064,10 +3111,14 @@ async function loadSettings() {
     try {
         state.config = await fetchConfig();
 
-        // Set max tracks to AI based on model's context limit
+        // Set max tracks/albums to AI based on model's context limit
         if (state.config.max_tracks_to_ai) {
             state.maxTracksToAI = Math.min(state.maxTracksToAI, state.config.max_tracks_to_ai);
             updateTrackLimitButtons();
+        }
+        if (state.config.max_albums_to_ai) {
+            state.rec.maxAlbumsToAI = Math.min(state.rec.maxAlbumsToAI, state.config.max_albums_to_ai);
+            updateAlbumLimitButtons();
         }
 
         updateSettings();
@@ -3160,6 +3211,7 @@ async function handleSaveSettings() {
         updateFooter();
         updateConfigRequiredUI();
         updateTrackLimitButtons();  // Refresh track limits based on new model
+        updateAlbumLimitButtons();  // Refresh album limits based on new model
         showSuccess('Settings saved!');
 
         // Clear password fields after save
@@ -3936,6 +3988,7 @@ async function loadRecommendFilters() {
     }
     // No chips selected = no filter (all albums included)
     renderRecFilterChips();
+    updateAlbumLimitButtons();
     updateRecAlbumPreview();
 }
 
@@ -4048,10 +4101,31 @@ function setRecStep(step) {
     updateRecStep();
 }
 
+// AbortController for cancelling in-flight recommend preview requests
+let recPreviewController = null;
+let recPreviewLoadingTimeout = null;
+
 async function updateRecAlbumPreview() {
     const countEl = document.getElementById('rec-preview-count');
     const costEl = document.getElementById('rec-preview-cost');
     if (!countEl) return;
+
+    // Cancel any in-flight request
+    if (recPreviewController) {
+        recPreviewController.abort();
+    }
+    recPreviewController = new AbortController();
+
+    // Clear any pending loading timeout
+    if (recPreviewLoadingTimeout) {
+        clearTimeout(recPreviewLoadingTimeout);
+    }
+
+    // Only show loading state if request takes longer than 150ms
+    recPreviewLoadingTimeout = setTimeout(() => {
+        countEl.innerHTML = '<span class="preview-spinner"></span> Counting...';
+        costEl.textContent = '';
+    }, 150);
 
     try {
         // All selected = no filter (avoids excluding untagged albums)
@@ -4066,16 +4140,62 @@ async function updateRecAlbumPreview() {
         if (!allDecades && state.rec.selectedDecades.length) {
             params.set('decades', state.rec.selectedDecades.join(','));
         }
-        const data = await apiCall(`/recommend/albums/preview?${params}`);
-        countEl.textContent = `${data.matching_albums} albums`;
-        if (data.estimated_cost > 0) {
-            costEl.textContent = `Est. cost: $${data.estimated_cost.toFixed(4)}`;
-        } else {
-            costEl.textContent = 'Est. cost: Free';
+        params.set('max_albums', state.rec.maxAlbumsToAI);
+
+        const response = await fetch(`/api/recommend/albums/preview?${params}`, {
+            signal: recPreviewController.signal,
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to get album preview');
         }
-    } catch (e) {
+
+        const data = await response.json();
+
+        // Clear loading timeout - response arrived fast
+        clearTimeout(recPreviewLoadingTimeout);
+
+        updateRecPreviewDisplay(data.matching_albums, data.albums_to_send, data.estimated_cost);
+    } catch (error) {
+        // Clear loading timeout on error too
+        clearTimeout(recPreviewLoadingTimeout);
+
+        // Ignore abort errors - they're expected when cancelling
+        if (error.name === 'AbortError') {
+            return;
+        }
+        console.error('Album preview error:', error);
         countEl.textContent = '-- albums';
         costEl.textContent = 'Est. cost: --';
+    }
+}
+
+function updateRecPreviewDisplay(matchingAlbums, albumsToSend, estimatedCost) {
+    const countEl = document.getElementById('rec-preview-count');
+    const costEl = document.getElementById('rec-preview-cost');
+
+    // Update album count display
+    if (albumsToSend < matchingAlbums) {
+        countEl.textContent = `${matchingAlbums.toLocaleString()} albums (sending ${albumsToSend.toLocaleString()} to AI)`;
+    } else {
+        countEl.textContent = `${matchingAlbums.toLocaleString()} albums`;
+    }
+
+    // For local providers, hide cost estimate
+    const isLocalProvider = state.config?.is_local_provider ?? false;
+    if (isLocalProvider) {
+        costEl.textContent = '';
+    } else if (estimatedCost > 0) {
+        costEl.textContent = `Est. cost: $${estimatedCost.toFixed(4)}`;
+    } else {
+        costEl.textContent = 'Est. cost: --';
+    }
+
+    // Update "All/Max" button label based on whether filtered albums fit in context
+    const maxBtn = document.querySelector('.album-limit-selector .limit-btn[data-limit="0"]');
+    if (maxBtn && state.config) {
+        const maxAllowed = state.config.max_albums_to_ai || 2500;
+        maxBtn.textContent = matchingAlbums <= maxAllowed ? 'All' : `Max (${maxAllowed.toLocaleString()})`;
     }
 }
 
@@ -4301,6 +4421,7 @@ async function handleRecGenerate() {
                 genres: (state.availableGenres.length > 0 && state.rec.selectedGenres.length === state.availableGenres.length) ? [] : state.rec.selectedGenres,
                 decades: (state.availableDecades.length > 0 && state.rec.selectedDecades.length === state.availableDecades.length) ? [] : state.rec.selectedDecades,
                 familiarity_pref: state.rec.familiarityPref,
+                max_albums: state.rec.maxAlbumsToAI,
             }),
         });
 
@@ -4334,29 +4455,30 @@ async function handleRecGenerate() {
                     continue;
                 }
                 if (line === '' && currentData) {
+                    let data;
                     try {
-                        const data = JSON.parse(currentData);
-                        if (currentEventType === 'error' && data.message) {
-                            throw new Error(data.message);
-                        }
-                        if (data.step) {
-                            updateStepProgress(data.step);
-                        }
-                        if (data.recommendations) {
-                            state.rec.recommendations = data.recommendations;
-                            state.rec.tokenCount = data.token_count || 0;
-                            state.rec.estimatedCost = data.estimated_cost || 0;
-                            state.rec.researchWarning = data.research_warning;
-                            if (data.result_id) {
-                                state.rec.resultId = data.result_id;
-                                markHistoryStale();
-                            }
-                        }
+                        data = JSON.parse(currentData);
                     } catch (parseErr) {
-                        if (parseErr.message && !parseErr.message.startsWith('Unexpected')) {
-                            throw parseErr; // Re-throw application errors (from error event)
-                        }
                         console.warn('SSE parse error:', parseErr);
+                        currentData = '';
+                        currentEventType = '';
+                        continue;
+                    }
+                    if (currentEventType === 'error' && data.message) {
+                        throw new Error(data.message);
+                    }
+                    if (data.step) {
+                        updateStepProgress(data.step);
+                    }
+                    if (data.recommendations) {
+                        state.rec.recommendations = data.recommendations;
+                        state.rec.tokenCount = data.token_count || 0;
+                        state.rec.estimatedCost = data.estimated_cost || 0;
+                        state.rec.researchWarning = data.research_warning;
+                        if (data.result_id) {
+                            state.rec.resultId = data.result_id;
+                            markHistoryStale();
+                        }
                     }
                     currentData = '';
                     currentEventType = '';
@@ -4365,6 +4487,10 @@ async function handleRecGenerate() {
         }
 
         hideStepLoading();
+        if (state.rec.recommendations.length === 0) {
+            showError('No recommendations were received. Please try again.');
+            return;
+        }
         renderRecResults();
         setRecStep('results');
 
@@ -4635,6 +4761,7 @@ function resetRecState() {
     state.rec.tokenCount = 0;
     state.rec.estimatedCost = 0;
     state.rec.researchWarning = null;
+    state.rec.resultId = null;
     state.rec.filterAnalysisPromise = null;
     // Preserve mode and familiarityPref; clear filter info banner
     const infoBanner = document.getElementById('rec-filter-info');

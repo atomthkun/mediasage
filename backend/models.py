@@ -403,6 +403,7 @@ class ConfigResponse(BaseModel):
     model_analysis: str  # The analysis model being used
     model_generation: str  # The generation model being used
     max_tracks_to_ai: int  # Recommended max tracks for this model
+    max_albums_to_ai: int  # Recommended max albums for this model
     cost_per_million_input: float  # Cost per million input tokens for generation model
     cost_per_million_output: float  # Cost per million output tokens for generation model
     analysis_cost_per_million_input: float = 0.0  # Cost per million input tokens for analysis model
@@ -636,6 +637,9 @@ class RecommendSessionState(BaseModel):
     taste_profile: TasteProfile | None = None
     familiarity_pref: Literal["any", "comfort", "rediscover", "hidden_gems"] = "any"
     previously_recommended: list[str] = []  # "artist|||album" keys shown in prior rounds
+    # Cost accumulators (reset each generation round)
+    total_tokens: int = 0
+    total_cost: float = 0.0
 
 
 class AnalyzePromptFiltersRequest(BaseModel):
@@ -692,6 +696,7 @@ class RecommendGenerateRequest(BaseModel):
     genres: list[str] = []
     decades: list[str] = []
     familiarity_pref: Literal["any", "comfort", "rediscover", "hidden_gems"] = "any"
+    max_albums: int = 2500
 
 
 class RecommendGenerateResponse(BaseModel):

@@ -46,6 +46,7 @@ DIMENSION_LIBRARY = [
 
 # Session expiry in seconds (30 minutes)
 SESSION_EXPIRY = 1800
+MAX_SESSIONS = 100
 
 
 class RecommendationPipeline:
@@ -64,8 +65,9 @@ class RecommendationPipeline:
         session_id: str,
         album_count: int = 0,
     ) -> None:
-        """Emit structured cost log line for calibration."""
+        """Emit structured cost log line and accumulate session totals."""
         cost = response.estimated_cost()
+        tokens = response.input_tokens + response.output_tokens
         cost_logger.info(
             "recommend.cost | call=%s model=%s input=%d output=%d cost=%.5f albums=%d session=%s",
             call_name,
@@ -76,6 +78,13 @@ class RecommendationPipeline:
             album_count,
             session_id,
         )
+        # Accumulate into session for response payload
+        with self._session_lock:
+            entry = self._sessions.get(session_id)
+            if entry:
+                session_state, ts = entry
+                session_state.total_tokens += tokens
+                session_state.total_cost += cost
 
     # ── Fact extraction ─────────────────────────────────────────────────
 
@@ -198,6 +207,41 @@ class RecommendationPipeline:
                 session_state.answer_texts = answer_texts
                 self._sessions[session_id] = (session_state, time.time())
 
+    def update_session_generate_state(
+        self,
+        session_id: str,
+        mode: str,
+        filters: dict,
+        familiarity_pref: str,
+        album_candidates: list[AlbumCandidate] | None = None,
+        taste_profile: TasteProfile | None = None,
+    ) -> None:
+        """Thread-safe update of session state for generate requests."""
+        with self._session_lock:
+            entry = self._sessions.get(session_id)
+            if entry:
+                session_state, _ = entry
+                session_state.mode = mode
+                session_state.filters = filters
+                session_state.familiarity_pref = familiarity_pref
+                if album_candidates is not None:
+                    session_state.album_candidates = album_candidates
+                if taste_profile is not None:
+                    session_state.taste_profile = taste_profile
+                # Reset cost accumulators for this generation round
+                session_state.total_tokens = 0
+                session_state.total_cost = 0.0
+                self._sessions[session_id] = (session_state, time.time())
+
+    def get_session_costs(self, session_id: str) -> tuple[int, float]:
+        """Read accumulated token count and cost for the current generation round."""
+        with self._session_lock:
+            entry = self._sessions.get(session_id)
+            if entry:
+                session_state, _ = entry
+                return session_state.total_tokens, session_state.total_cost
+        return 0, 0.0
+
     def update_previously_recommended(
         self, session_id: str, new_keys: list[str]
     ) -> None:
@@ -220,7 +264,7 @@ class RecommendationPipeline:
             self._sessions.pop(session_id, None)
 
     def _expire_old_sessions(self) -> None:
-        """Remove sessions older than SESSION_EXPIRY. Caller must hold _session_lock."""
+        """Remove expired sessions and evict oldest if over MAX_SESSIONS. Caller must hold _session_lock."""
         now = time.time()
         expired = [
             sid for sid, (_, ts) in self._sessions.items()
@@ -229,6 +273,11 @@ class RecommendationPipeline:
         for sid in expired:
             del self._sessions[sid]
             logger.info("Expired recommendation session %s", sid)
+        # Evict oldest sessions if over the cap
+        while len(self._sessions) > MAX_SESSIONS:
+            oldest_sid = min(self._sessions, key=lambda s: self._sessions[s][1])
+            del self._sessions[oldest_sid]
+            logger.info("Evicted oldest recommendation session %s (over cap)", oldest_sid)
 
     # ── Pipeline steps ──────────────────────────────────────────────────
 
@@ -506,14 +555,45 @@ class RecommendationPipeline:
                         candidate = cval
                         break
 
+            # Fallback: fuzzy match for slight name variations
+            if candidate is None:
+                from rapidfuzz import fuzz
+                from backend.plex_client import simplify_string
+                best_score = 0
+                best_candidate = None
+                simplified_artist = simplify_string(artist)
+                simplified_album = simplify_string(album)
+                for cval in candidate_lookup.values():
+                    artist_score = fuzz.ratio(simplified_artist, simplify_string(cval.album_artist))
+                    if artist_score < 70:
+                        continue
+                    album_score = fuzz.ratio(simplified_album, simplify_string(cval.album))
+                    combined = (artist_score + album_score) / 2
+                    if combined > best_score and combined >= 70:
+                        best_score = combined
+                        best_candidate = cval
+                if best_candidate:
+                    candidate = best_candidate
+                    logger.info(
+                        "Fuzzy matched LLM selection '%s — %s' to '%s — %s' (score: %.0f)",
+                        artist, album, candidate.album_artist, candidate.album, best_score,
+                    )
+
+            # Skip unmatched albums — unplayable in library mode
+            if candidate is None:
+                logger.warning(
+                    "Skipping unmatched LLM album selection: %s — %s", artist, album,
+                )
+                continue
+
             rec = AlbumRecommendation(
                 rank=rank if rank in ("primary", "secondary") else "secondary",
-                album=candidate.album if candidate else album,
-                artist=candidate.album_artist if candidate else artist,
-                year=candidate.year if candidate else None,
-                rating_key=candidate.parent_rating_key if candidate else None,
-                track_rating_keys=candidate.track_rating_keys if candidate else [],
-                art_url=f"/api/art/{candidate.track_rating_keys[0]}" if candidate and candidate.track_rating_keys else None,
+                album=candidate.album,
+                artist=candidate.album_artist,
+                year=candidate.year,
+                rating_key=candidate.parent_rating_key,
+                track_rating_keys=candidate.track_rating_keys,
+                art_url=f"/api/art/{candidate.track_rating_keys[0]}" if candidate.track_rating_keys else None,
             )
             recommendations.append(rec)
 
@@ -977,7 +1057,7 @@ class RecommendationPipeline:
             f"User's taste profile:\n{taste_text}\n\n"
             f"Albums user already owns (DO NOT recommend these):\n{exclusion_text}"
             f"{prev_text}\n\n"
-            f"Recommend 3 albums they don't own: 1 primary + 2 secondary."
+            f"Recommend 5 albums they don't own: 1 primary + 4 secondary."
         )
 
         response = self.llm_client.analyze(user_prompt, system)
@@ -993,7 +1073,9 @@ class RecommendationPipeline:
             for a in taste_profile.owned_albums
         }
 
-        for item in raw[:3]:
+        for item in raw[:5]:
+            if len(recommendations) >= 3:
+                break
             # Skip albums the user already owns
             rec_key = f"{item.get('artist', '').lower()}|||{item.get('album', '').lower()}"
             if rec_key in owned_set:
