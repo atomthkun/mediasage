@@ -4711,18 +4711,20 @@ function renderRecResults() {
 
             return `
                 <div class="rec-secondary-card">
-                    ${artHtml}
-                    <div class="rec-secondary-info">
-                        <div class="rec-secondary-title">${escapeHtml(rec.album)}</div>
-                        <div class="rec-secondary-artist">${escapeHtml(rec.artist)}${rec.year ? ` (${rec.year})` : ''}</div>
-                        <div class="rec-secondary-pitch">${escapeHtml(rec.pitch?.short_pitch || rec.pitch?.full_text || '')}</div>
-                        ${rec.track_rating_keys?.length ? `
-                            <div class="rec-secondary-actions">
-                                <button class="btn btn-secondary btn-sm rec-play-btn" data-rating-keys="${escapeHtml(rec.track_rating_keys.join(','))}">&#9654; Play</button>
-                                <button class="btn btn-secondary btn-sm rec-save-btn" data-album="${escapeHtml(rec.album)}" data-artist="${escapeHtml(rec.artist)}" data-rating-keys="${escapeHtml(rec.track_rating_keys.join(','))}" data-pitch="${escapeHtml(rec.pitch?.full_text || '')}">Save</button>
-                            </div>
-                        ` : ''}
+                    <div class="rec-secondary-header">
+                        ${artHtml}
+                        <div class="rec-secondary-info">
+                            <div class="rec-secondary-title">${escapeHtml(rec.album)}</div>
+                            <div class="rec-secondary-artist">${escapeHtml(rec.artist)}${rec.year ? ` (${rec.year})` : ''}</div>
+                            ${rec.track_rating_keys?.length ? `
+                                <div class="rec-secondary-actions">
+                                    <button class="btn btn-secondary btn-sm rec-play-btn" data-rating-keys="${escapeHtml(rec.track_rating_keys.join(','))}">&#9654; Play</button>
+                                    <button class="btn btn-secondary btn-sm rec-save-btn" data-album="${escapeHtml(rec.album)}" data-artist="${escapeHtml(rec.artist)}" data-rating-keys="${escapeHtml(rec.track_rating_keys.join(','))}" data-pitch="${escapeHtml(rec.pitch?.full_text || '')}">Save</button>
+                                </div>
+                            ` : ''}
+                        </div>
                     </div>
+                    <div class="rec-secondary-pitch">${escapeHtml(rec.pitch?.short_pitch || rec.pitch?.full_text || '')}</div>
                 </div>
             `;
         }).join('');
