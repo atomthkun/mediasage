@@ -1,5 +1,6 @@
 """Tests for the recommendation pipeline grounding improvements."""
 
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,7 +9,13 @@ from backend.models import (
     ExtractedFacts,
     PitchIssue,
     PitchValidation,
+    RecommendSessionState,
     ResearchData,
+)
+from backend.recommender import (
+    MAX_SESSIONS,
+    SESSION_EXPIRY,
+    RecommendationPipeline,
 )
 
 
@@ -368,7 +375,7 @@ class TestWritePitchesGrounding:
         ]
 
         facts = {
-            "Sigur Ros|||Agaetis byrjun": ExtractedFacts(
+            "sigur ros|||agaetis byrjun": ExtractedFacts(
                 origin_story="Recorded in a Reykjavik swimming pool",
                 vocal_approach="Mostly Icelandic; Vonlenska on 2 tracks only",
                 common_misconceptions="Not entirely in Vonlenska despite common belief",
@@ -376,7 +383,7 @@ class TestWritePitchesGrounding:
         }
 
         research = {
-            "Sigur Ros|||Agaetis byrjun": ResearchData(
+            "sigur ros|||agaetis byrjun": ResearchData(
                 track_listing=["Intro", "Svefn-g-englar", "Staralfur"],
             ),
         }
@@ -582,3 +589,129 @@ class TestPitchRewrite:
 
         # Verify pitch was updated
         assert rec.pitch.hook == "Corrected hook"
+
+
+# ── Session Management Tests ────────────────────────────────────────────
+
+
+def _make_pipeline():
+    """Create a pipeline with mock dependencies."""
+    config = MagicMock()
+    config.llm = MagicMock()
+    llm_client = MagicMock()
+    return RecommendationPipeline(config, llm_client)
+
+
+class TestSessionLifecycle:
+    """Test session create/get/update/delete and expiry."""
+
+    def test_create_and_get(self):
+        pipeline = _make_pipeline()
+        state = RecommendSessionState(prompt="jazz recs")
+        sid = pipeline.create_session(state)
+
+        assert sid.startswith("rec_")
+        retrieved = pipeline.get_session(sid)
+        assert retrieved is not None
+        assert retrieved.prompt == "jazz recs"
+
+    def test_get_nonexistent_returns_none(self):
+        pipeline = _make_pipeline()
+        assert pipeline.get_session("rec_doesnotexist") is None
+
+    def test_delete_session(self):
+        pipeline = _make_pipeline()
+        state = RecommendSessionState(prompt="test")
+        sid = pipeline.create_session(state)
+        pipeline.delete_session(sid)
+        assert pipeline.get_session(sid) is None
+
+    def test_update_answers(self):
+        pipeline = _make_pipeline()
+        state = RecommendSessionState(prompt="test")
+        sid = pipeline.create_session(state)
+
+        pipeline.update_session_answers(sid, ["option_a", None], ["Rock", ""])
+        retrieved = pipeline.get_session(sid)
+        assert retrieved.answers == ["option_a", None]
+        assert retrieved.answer_texts == ["Rock", ""]
+
+    def test_update_previously_recommended(self):
+        pipeline = _make_pipeline()
+        state = RecommendSessionState(prompt="test")
+        sid = pipeline.create_session(state)
+
+        pipeline.update_previously_recommended(sid, ["artist1|||album1"])
+        retrieved = pipeline.get_session(sid)
+        assert "artist1|||album1" in retrieved.previously_recommended
+
+        # Duplicates should not be added
+        pipeline.update_previously_recommended(sid, ["artist1|||album1"])
+        retrieved = pipeline.get_session(sid)
+        assert retrieved.previously_recommended.count("artist1|||album1") == 1
+
+    def test_previously_recommended_capped_at_30(self):
+        pipeline = _make_pipeline()
+        state = RecommendSessionState(prompt="test")
+        sid = pipeline.create_session(state)
+
+        keys = [f"artist{i}|||album{i}" for i in range(35)]
+        pipeline.update_previously_recommended(sid, keys)
+        retrieved = pipeline.get_session(sid)
+        assert len(retrieved.previously_recommended) == 30
+        # Should keep the most recent 30
+        assert retrieved.previously_recommended[-1] == "artist34|||album34"
+
+    def test_session_expiry(self):
+        pipeline = _make_pipeline()
+        state = RecommendSessionState(prompt="old session")
+        sid = pipeline.create_session(state)
+
+        # Manually backdate the timestamp beyond SESSION_EXPIRY
+        with pipeline._session_lock:
+            s, _ = pipeline._sessions[sid]
+            pipeline._sessions[sid] = (s, time.time() - SESSION_EXPIRY - 1)
+
+        # Accessing triggers expiry check
+        assert pipeline.get_session(sid) is None
+
+    def test_session_eviction_over_cap(self):
+        pipeline = _make_pipeline()
+
+        # Create MAX_SESSIONS + 5 sessions
+        sids = []
+        for i in range(MAX_SESSIONS + 5):
+            state = RecommendSessionState(prompt=f"session {i}")
+            sid = pipeline.create_session(state)
+            sids.append(sid)
+
+        # Eviction runs before each insert, so after the last insert there can
+        # be MAX_SESSIONS + 1. Next access triggers cleanup.
+        pipeline.get_session(sids[-1])
+        with pipeline._session_lock:
+            assert len(pipeline._sessions) <= MAX_SESSIONS
+
+    def test_migrate_sessions(self):
+        old = _make_pipeline()
+        state = RecommendSessionState(prompt="migrated")
+        sid = old.create_session(state)
+
+        new = _make_pipeline()
+        new.migrate_sessions_from(old)
+
+        retrieved = new.get_session(sid)
+        assert retrieved is not None
+        assert retrieved.prompt == "migrated"
+
+    def test_generate_state_resets_cost(self):
+        pipeline = _make_pipeline()
+        state = RecommendSessionState(prompt="test", total_tokens=500, total_cost=0.05)
+        sid = pipeline.create_session(state)
+
+        pipeline.update_session_generate_state(
+            sid, mode="library", filters={}, familiarity_pref="any"
+        )
+
+        tokens, cost = pipeline.get_session_costs(sid)
+        assert tokens == 0
+        assert cost == 0.0
