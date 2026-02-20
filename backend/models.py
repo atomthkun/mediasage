@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def album_key(artist: str, album: str, lower: bool = True) -> str:
@@ -161,7 +161,7 @@ class LibraryStatsResponse(BaseModel):
 class AnalyzePromptRequest(BaseModel):
     """Request to analyze a natural language prompt."""
 
-    prompt: str
+    prompt: str = Field(..., min_length=1, max_length=2000)
 
 
 class AnalyzePromptResponse(BaseModel):
@@ -688,7 +688,7 @@ class AnalyzePromptFiltersResponse(BaseModel):
 class RecommendQuestionsRequest(BaseModel):
     """Request to generate clarifying questions."""
 
-    prompt: str
+    prompt: str = Field(..., min_length=1, max_length=2000)
 
 
 class RecommendQuestionsResponse(BaseModel):

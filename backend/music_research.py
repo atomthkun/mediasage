@@ -28,6 +28,15 @@ MB_RATE_LIMIT = 1.0  # seconds between requests
 
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 
+# Release-group scoring weights for _pick_best_release_group
+RG_ARTIST_MATCH = 60       # Artist credit matches query artist
+RG_TITLE_EXACT = 50        # Album title is an exact match
+RG_TITLE_PREFIX = 30       # Album title starts with the query
+RG_TITLE_CONTAINS = 10     # Query appears somewhere in the title
+RG_TYPE_ALBUM = 20         # Primary type is "Album" (vs compilation/EP)
+RG_YEAR_MATCH = 40         # First-release year matches query year
+RG_MB_SCORE_DIVISOR = 10   # Normalise MusicBrainz relevance (0-100 → 0-10)
+
 # Keywords to drop Wikipedia sections — matched as substrings against section titles
 _WIKIPEDIA_DROP_KEYWORDS = [
     "track listing", "chart", "certification", "personnel", "credits",
@@ -105,12 +114,13 @@ class MusicResearchClient:
     def __init__(self):
         self._http: httpx.AsyncClient | None = None
         self._last_mb_request: float = 0
-        self._rate_lock = asyncio.Lock()
+        self._client_lock = asyncio.Lock()  # Guards HTTP client init
+        self._rate_lock = asyncio.Lock()  # Guards MusicBrainz rate limiting
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Lazily create the HTTP client (guarded by rate lock)."""
+        """Lazily create the HTTP client."""
         if self._http is None or self._http.is_closed:
-            async with self._rate_lock:
+            async with self._client_lock:
                 if self._http is None or self._http.is_closed:
                     self._http = httpx.AsyncClient(
                         timeout=10.0,
@@ -251,30 +261,30 @@ class MusicResearchClient:
                         len(credit_name) >= 3
                         and (artist_lower in credit_name or credit_name in artist_lower)
                     ):
-                        score += 60
+                        score += RG_ARTIST_MATCH
                         break
 
             # Title match: exact > starts-with > contains
             if title_lower == album_lower:
-                score += 50
+                score += RG_TITLE_EXACT
             elif title_lower.startswith(album_lower):
-                score += 30
+                score += RG_TITLE_PREFIX
             elif album_lower in title_lower:
-                score += 10
+                score += RG_TITLE_CONTAINS
 
             # Prefer Album type over Other/unknown
             if rg.get("primary-type") == "Album":
-                score += 20
+                score += RG_TYPE_ALBUM
 
             # Year match is a strong signal
             if year:
                 release_date = rg.get("first-release-date", "")
                 if release_date.startswith(str(year)):
-                    score += 40
+                    score += RG_YEAR_MATCH
 
             # MB relevance score (0-100, normalized)
             mb_score = rg.get("score", 0)
-            score += mb_score / 10
+            score += mb_score / RG_MB_SCORE_DIVISOR
 
             if score > best_score:
                 best_score = score

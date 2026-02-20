@@ -44,6 +44,7 @@ _sync_lock = threading.Lock()
 
 # Track if schema has been initialized
 _schema_initialized = False
+_schema_lock = threading.Lock()
 
 
 def _is_live_version(title: str, album: str) -> bool:
@@ -188,10 +189,12 @@ def ensure_db_initialized() -> sqlite3.Connection:
     global _schema_initialized, _migration_applied
     conn = get_db_connection()
 
-    # Only initialize schema once per process to avoid lock contention
+    # Only initialize schema once per process; lock prevents races on startup
     if not _schema_initialized:
-        _migration_applied = init_schema(conn)
-        _schema_initialized = True
+        with _schema_lock:
+            if not _schema_initialized:
+                _migration_applied = init_schema(conn)
+                _schema_initialized = True
 
     return conn
 
@@ -209,21 +212,25 @@ def get_sync_state() -> dict[str, Any]:
             "FROM sync_state WHERE id = 1"
         ).fetchone()
 
+        # Snapshot sync state under lock for consistent reads
+        with _sync_lock:
+            ss = dict(_sync_state)
+
         result = {
             "track_count": row["track_count"] if row else 0,
             "synced_at": row["last_sync_at"] if row else None,
             "plex_server_id": row["plex_server_id"] if row else None,
             "sync_duration_ms": row["sync_duration_ms"] if row else None,
-            "is_syncing": _sync_state["is_syncing"],
+            "is_syncing": ss["is_syncing"],
             "sync_progress": None,
-            "error": _sync_state["error"],
+            "error": ss["error"],
         }
 
-        if _sync_state["is_syncing"]:
+        if ss["is_syncing"]:
             result["sync_progress"] = {
-                "phase": _sync_state["phase"],
-                "current": _sync_state["current"],
-                "total": _sync_state["total"],
+                "phase": ss["phase"],
+                "current": ss["current"],
+                "total": ss["total"],
             }
 
         return result
@@ -456,14 +463,16 @@ def sync_library(
         logger.info("Got metadata for %d albums", len(album_metadata))
 
         # Phase 2: Fetch all tracks from Plex
-        _sync_state["phase"] = "fetching"
+        with _sync_lock:
+            _sync_state["phase"] = "fetching"
         logger.info("Fetching all tracks from Plex (this may take 30-60s)...")
         all_tracks = plex_client.get_all_raw_tracks()
         total = len(all_tracks)
         logger.info("Got %d tracks from Plex", total)
 
-        _sync_state["total"] = total
-        _sync_state["phase"] = "processing"
+        with _sync_lock:
+            _sync_state["total"] = total
+            _sync_state["phase"] = "processing"
 
         # Phase 3: Process tracks in batches with album metadata lookup
         synced_count = 0
@@ -513,8 +522,9 @@ def sync_library(
                 synced_count += len(batch_data)
                 batch_data = []
 
-                # Update progress
-                _sync_state["current"] = synced_count
+                # Update progress (single field, atomic under CPython GIL)
+                with _sync_lock:
+                    _sync_state["current"] = synced_count
                 if on_progress:
                     on_progress(synced_count, total)
 
@@ -533,7 +543,8 @@ def sync_library(
                 batch_data,
             )
             synced_count += len(batch_data)
-            _sync_state["current"] = synced_count
+            with _sync_lock:
+                _sync_state["current"] = synced_count
 
         # Final commit
         conn.commit()
@@ -563,14 +574,16 @@ def sync_library(
 
     except Exception as e:
         logger.exception("Sync failed: %s", e)
-        _sync_state["error"] = str(e)
+        with _sync_lock:
+            _sync_state["error"] = str(e)
         return {"success": False, "error": str(e)}
 
     finally:
-        _sync_state["is_syncing"] = False
-        _sync_state["phase"] = None
-        _sync_state["current"] = 0
-        _sync_state["total"] = 0
+        with _sync_lock:
+            _sync_state["is_syncing"] = False
+            _sync_state["phase"] = None
+            _sync_state["current"] = 0
+            _sync_state["total"] = 0
         if conn:
             conn.close()
 
@@ -581,13 +594,8 @@ def get_sync_progress() -> dict[str, Any]:
     Returns:
         Dict with is_syncing, phase, current, total, error
     """
-    return {
-        "is_syncing": _sync_state["is_syncing"],
-        "phase": _sync_state["phase"],
-        "current": _sync_state["current"],
-        "total": _sync_state["total"],
-        "error": _sync_state["error"],
-    }
+    with _sync_lock:
+        return dict(_sync_state)
 
 
 def count_tracks_by_filters(
@@ -748,6 +756,7 @@ def get_album_candidates(
                 albums[prk] = {
                     "parent_rating_key": prk,
                     "album": row["album"],
+                    # artist column stores grandparentTitle (album artist), not track artist
                     "album_artist": row["artist"],
                     "year": year,
                     "genres": [],

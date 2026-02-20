@@ -694,7 +694,7 @@ function historyIconTitle(type) {
 
 /** Scrub date suffix from playlist titles (e.g., "Title - Feb 2026") */
 function scrubDateSuffix(title) {
-    return title.replace(/ - [A-Z][a-z]+ \d{4}$/, '');
+    return title.replace(/ - (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}$/, '');
 }
 
 /** Check if item passes the current filter */
@@ -867,13 +867,26 @@ function handleHistoryDelete(resultId, deleteBtn) {
 
 /** Actually delete the result via API and remove from cache */
 function finalizeHistoryDelete(resultId) {
-    fetch(`/api/results/${encodeURIComponent(resultId)}`, { method: 'DELETE' }).catch(() => {});
+    // Optimistically remove from cache and re-render
     _historyCache.items = _historyCache.items.filter(i => i.id !== resultId);
     _historyCache.total = Math.max(0, _historyCache.total - 1);
     _historyDeleteConfirm = null;
-
-    // Re-render to clean up DOM
     renderHistoryFeedFromCache();
+
+    // Fire the server delete; restore cache on failure
+    fetch(`/api/results/${encodeURIComponent(resultId)}`, { method: 'DELETE' })
+        .then(resp => {
+            if (!resp.ok && resp.status !== 404) {
+                showError('Failed to delete item');
+                _historyCache.items = null; // Force reload on next render
+                loadHistoryFeed();
+            }
+        })
+        .catch(() => {
+            showError('Failed to delete item');
+            _historyCache.items = null;
+            loadHistoryFeed();
+        });
 }
 
 
@@ -989,6 +1002,8 @@ function updateMode() {
 }
 
 function updateStep() {
+    window.scrollTo(0, 0);
+
     const isResults = state.step === 'results';
 
     // Hide step progress on results step
@@ -3992,6 +4007,8 @@ function shufflePromptPills(containerId, groups) {
 }
 
 function updateRecStep() {
+    window.scrollTo(0, 0);
+
     const steps = ['prompt', 'refine', 'setup', 'results'];
     const currentIndex = steps.indexOf(state.rec.step);
 
@@ -4014,9 +4031,8 @@ function updateRecStep() {
         connector.classList.toggle('completed', i < currentIndex);
     });
 
-    // Hide progress bar on results and scroll to top
+    // Hide progress bar on results
     const isResults = state.rec.step === 'results';
-    if (isResults) window.scrollTo(0, 0);
     const recProgress = document.getElementById('rec-steps');
     if (recProgress) {
         recProgress.style.display = isResults ? 'none' : '';
@@ -4344,10 +4360,19 @@ async function handleRecGenerate() {
     ];
     showStepLoading(progressSteps);
 
+    // Abort if no data arrives for 120 seconds (server hang, network loss)
+    const controller = new AbortController();
+    let staleTimer = setTimeout(() => controller.abort(), 120000);
+    const resetStaleTimer = () => {
+        clearTimeout(staleTimer);
+        staleTimer = setTimeout(() => controller.abort(), 120000);
+    };
+
     try {
         const response = await fetch('/api/recommend/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
             body: JSON.stringify({
                 session_id: state.rec.sessionId,
                 answers: state.rec.answers,
@@ -4373,6 +4398,7 @@ async function handleRecGenerate() {
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+            resetStaleTimer();
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
@@ -4435,8 +4461,13 @@ async function handleRecGenerate() {
         }
     } catch (e) {
         hideStepLoading();
-        showError(e.message);
+        if (e.name === 'AbortError') {
+            showError('Recommendation timed out — the server may be overloaded. Please try again.');
+        } else {
+            showError(e.message);
+        }
     } finally {
+        clearTimeout(staleTimer);
         state.rec.loading = false;
     }
 }

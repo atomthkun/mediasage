@@ -29,6 +29,10 @@ from backend.models import (
 )
 from backend.plex_client import simplify_string
 
+# Fuzzy-match thresholds for album selection (0-100 scale, rapidfuzz)
+ALBUM_ARTIST_MIN_SCORE = 70   # Minimum artist similarity to consider a match
+ALBUM_COMBINED_MIN_SCORE = 70  # Minimum (artist+album)/2 to accept a match
+
 logger = logging.getLogger(__name__)
 cost_logger = logging.getLogger("recommend.cost")
 
@@ -253,6 +257,12 @@ class RecommendationPipeline:
             self._sessions[session_id] = (session_state, time.time())
             return session_id
 
+    def migrate_sessions_from(self, other: "RecommendationPipeline") -> None:
+        """Thread-safe session migration from another pipeline instance."""
+        with other._session_lock:
+            with self._session_lock:
+                self._sessions = dict(other._sessions)
+
     def get_session(self, session_id: str) -> RecommendSessionState | None:
         """Retrieve a session by ID, or None if expired/missing."""
         with self._session_lock:
@@ -264,6 +274,15 @@ class RecommendationPipeline:
             # Touch timestamp on access
             self._sessions[session_id] = (session_state, time.time())
             return session_state
+
+    def update_session_questions(self, session_id: str, questions: list) -> None:
+        """Thread-safe update of session questions (after generation)."""
+        with self._session_lock:
+            entry = self._sessions.get(session_id)
+            if entry:
+                session_state, _ = entry
+                session_state.questions = questions
+                self._sessions[session_id] = (session_state, time.time())
 
     def update_session_answers(
         self, session_id: str, answers: list, answer_texts: list
@@ -607,11 +626,11 @@ class RecommendationPipeline:
                 simplified_album = simplify_string(album)
                 for cval in candidate_lookup.values():
                     artist_score = fuzz.ratio(simplified_artist, simplify_string(cval.album_artist))
-                    if artist_score < 70:
+                    if artist_score < ALBUM_ARTIST_MIN_SCORE:
                         continue
                     album_score = fuzz.ratio(simplified_album, simplify_string(cval.album))
                     combined = (artist_score + album_score) / 2
-                    if combined > best_score and combined >= 70:
+                    if combined > best_score and combined >= ALBUM_COMBINED_MIN_SCORE:
                         best_score = combined
                         best_candidate = cval
                 if best_candidate:
@@ -676,17 +695,16 @@ class RecommendationPipeline:
                 desc += f"\nFamiliarity: {level}"
 
             # Add extracted facts if available (preferred over raw research)
-            facts_key = album_key(rec.artist, rec.album, lower=False)
-            if extracted_facts and facts_key in extracted_facts:
-                ef = extracted_facts[facts_key]
+            lookup_key = album_key(rec.artist, rec.album)
+            if extracted_facts and lookup_key in extracted_facts:
+                ef = extracted_facts[lookup_key]
                 facts_text = ef.to_text(include_track_listing=False)
                 if facts_text:
                     desc += f"\n\nEXTRACTED FACTS (from Wikipedia, MusicBrainz, and reviews):\n{facts_text}"
 
             # Add track listing from research if available
-            research_key = album_key(rec.artist, rec.album, lower=False)
-            if research and research_key in research:
-                rd = research[research_key]
+            if research and lookup_key in research:
+                rd = research[lookup_key]
                 if rd.track_listing:
                     desc += f"\n\nTRACK LISTING: {', '.join(rd.track_listing)}"
                 if rd.label:
@@ -800,7 +818,7 @@ class RecommendationPipeline:
                 )
 
             # Mark research availability
-            if research and album_key(rec.artist, rec.album, lower=False) in research:
+            if research and album_key(rec.artist, rec.album) in research:
                 rec.research_available = True
 
         return recommendations
@@ -998,7 +1016,7 @@ class RecommendationPipeline:
 
         system = (
             "You are a music recommendation expert with encyclopedic knowledge. "
-            "Recommend 5 albums the user does NOT already own that match their request and taste profile. "
+            "Recommend 7 albums the user does NOT already own that match their request and taste profile. "
             "The first pick is the PRIMARY recommendation (best match), the others are SECONDARY.\n\n"
             "IMPORTANT: Do NOT recommend any album from the exclusion list below. "
             "Recommend real, existing albums with correct artist names and years.\n\n"
@@ -1024,7 +1042,7 @@ class RecommendationPipeline:
             f"User's taste profile:\n{taste_text}\n\n"
             f"Albums user already owns (DO NOT recommend these):\n{exclusion_text}"
             f"{prev_text}\n\n"
-            f"Recommend 5 albums they don't own: 1 primary + 4 secondary."
+            f"Recommend 7 albums they don't own: 1 primary + 6 secondary."
         )
 
         response = self.llm_client.analyze(user_prompt, system)
@@ -1040,7 +1058,7 @@ class RecommendationPipeline:
             for a in taste_profile.owned_albums
         }
 
-        for item in raw[:5]:
+        for item in raw[:7]:
             if len(recommendations) >= 3:
                 break
             # Skip albums the user already owns
@@ -1108,4 +1126,7 @@ class RecommendationPipeline:
         self._log_cost("discovery_validation", response, session_id)
 
         result = self.llm_client.parse_json_response(response)
-        return result.get("valid", True) if isinstance(result, dict) else True
+        if not isinstance(result, dict):
+            logger.warning("validate_discovery_album: unexpected response type %s, treating as invalid", type(result).__name__)
+            return False
+        return result.get("valid", False)

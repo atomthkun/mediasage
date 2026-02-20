@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from starlette.responses import StreamingResponse
@@ -688,8 +688,7 @@ def _get_pipeline():
                 _recommendation_pipeline = RecommendationPipeline(config, llm_client)
                 # Migrate active sessions from old pipeline to preserve in-flight requests
                 if old_pipeline is not None:
-                    with old_pipeline._session_lock:
-                        _recommendation_pipeline._sessions = dict(old_pipeline._sessions)
+                    _recommendation_pipeline.migrate_sessions_from(old_pipeline)
                 _recommendation_pipeline_llm = llm_client
     return _recommendation_pipeline
 
@@ -834,33 +833,41 @@ async def recommend_questions(request: RecommendQuestionsRequest) -> RecommendQu
         raise HTTPException(status_code=503, detail="LLM not configured")
 
     try:
-        # Run gap analysis + question generation (only needs the prompt)
-        dimension_ids = await asyncio.to_thread(
-            pipeline.gap_analysis, request.prompt, "pending"
-        )
-        questions = await asyncio.to_thread(
-            pipeline.generate_questions, request.prompt, dimension_ids, "pending"
-        )
-
-        # Create lightweight session: just prompt + questions
+        # Create session upfront so gap analysis and question costs are tracked
         session_state = RecommendSessionState(
             mode="library",
             prompt=request.prompt,
             filters={"genres": [], "decades": []},
-            questions=questions,
+            questions=[],
             album_candidates=[],
             taste_profile=None,
             familiarity_pref="any",
         )
         session_id = pipeline.create_session(session_state)
 
+        # Run gap analysis + question generation (only needs the prompt)
+        dimension_ids = await asyncio.to_thread(
+            pipeline.gap_analysis, request.prompt, session_id
+        )
+        questions = await asyncio.to_thread(
+            pipeline.generate_questions, request.prompt, dimension_ids, session_id
+        )
+
+        # Store questions in session
+        pipeline.update_session_questions(session_id, questions)
+
+        total_tokens, total_cost = pipeline.get_session_costs(session_id)
+
         return RecommendQuestionsResponse(
             questions=questions,
             session_id=session_id,
-            token_count=0,
-            estimated_cost=0.0,
+            token_count=total_tokens,
+            estimated_cost=total_cost,
         )
     except Exception as e:
+        # Clean up the session if question generation failed
+        if 'session_id' in locals():
+            pipeline.delete_session(session_id)
         raise HTTPException(status_code=500, detail=f"Question generation failed: {str(e)}")
 
 
@@ -898,7 +905,7 @@ async def recommend_switch_mode(request: RecommendSwitchModeRequest) -> Recommen
 
 
 @app.post("/api/recommend/generate")
-async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResponse:
+async def recommend_generate(request: RecommendGenerateRequest, raw_request: Request) -> StreamingResponse:
     """Generate album recommendations with SSE progress streaming."""
     pipeline = _get_pipeline()
     if not pipeline:
@@ -969,18 +976,35 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
         taste_profile=loaded_taste_profile,
     )
 
-    # Snapshot session fields before entering the generator to avoid TOCTOU
-    # races — a concurrent "Show me another" request could mutate the session
-    # while event_stream is still reading from it.
+    # Snapshot fields before entering the generator to avoid TOCTOU races —
+    # a concurrent "Show me another" request could mutate the session while
+    # event_stream is still reading from it. Use request fields directly
+    # where available (immutable per-request); only read session for
+    # accumulated state (prompt set during questions, previously_recommended).
     _prompt = session.prompt
-    _answers = list(session.answers) if session.answers else []
-    _answer_texts = list(session.answer_texts) if session.answer_texts else []
-    _familiarity_pref = session.familiarity_pref
+    _answers = list(request.answers) if request.answers else []
+    _answer_texts = list(request.answer_texts) if request.answer_texts else []
+    _familiarity_pref = request.familiarity_pref
     _previously_recommended = list(session.previously_recommended) if session.previously_recommended else None
 
     async def event_stream():
         research_warning = None
         research_data = {}
+
+        # iOS Safari aggressively suspends background tabs, tearing down TCP
+        # connections even when the user intends to return. Skip server-side
+        # disconnect checks for iOS to avoid false-positive aborts.
+        _ua = (raw_request.headers.get("user-agent") or "").lower()
+        _is_ios = "iphone" in _ua or "ipad" in _ua
+
+        async def _check_disconnect():
+            """Abort if the client has disconnected (saves LLM token costs)."""
+            if _is_ios:
+                return False
+            if await raw_request.is_disconnected():
+                logger.info("Client disconnected, aborting recommendation for session %s", request.session_id)
+                return True
+            return False
 
         try:
             is_discovery = request.mode == "discovery"
@@ -1021,8 +1045,8 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 recommendations = await asyncio.to_thread(
                     pipeline.select_albums,
                     prompt=_prompt,
-                    answers=request.answers,
-                    answer_texts=request.answer_texts,
+                    answers=_answers,
+                    answer_texts=_answer_texts,
                     album_candidates=loaded_candidates,
                     session_id=request.session_id,
                     familiarity_pref=request.familiarity_pref,
@@ -1037,6 +1061,8 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 )
 
             # Step 2: Research primary album
+            if await _check_disconnect():
+                return
             yield f"event: progress\ndata: {json.dumps({'step': 'researching_primary', 'message': 'Researching an album...'})}\n\n"
 
             research_client = _get_research_client()
@@ -1045,7 +1071,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 try:
                     rd = await research_client.research_album(primary.artist, primary.album, full=True, year=primary.year)
                     if rd.musicbrainz_id:
-                        research_data[album_key(primary.artist, primary.album, lower=False)] = rd
+                        research_data[album_key(primary.artist, primary.album)] = rd
                         primary.research_available = True
                         _apply_year_override(primary, rd)
 
@@ -1069,6 +1095,8 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                     research_warning = "Research was unavailable for the primary album — factual details could not be verified and may be approximate."
 
             # Step 3: Research secondary albums (light research)
+            if await _check_disconnect():
+                return
             yield f"event: progress\ndata: {json.dumps({'step': 'researching_secondary', 'message': 'Looking up additional picks...'})}\n\n"
 
             secondaries = [r for r in recommendations if r.rank == "secondary"]
@@ -1076,7 +1104,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 try:
                     rd = await research_client.research_album(sec.artist, sec.album, full=False, year=sec.year)
                     if rd.musicbrainz_id:
-                        research_data[album_key(sec.artist, sec.album, lower=False)] = rd
+                        research_data[album_key(sec.artist, sec.album)] = rd
                         sec.research_available = True
                         _apply_year_override(sec, rd)
 
@@ -1086,7 +1114,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
 
             # Step 3.5: Extract facts from research (primary album only)
             extracted_facts = {}
-            primary_key = album_key(primary.artist, primary.album, lower=False) if primary else None
+            primary_key = album_key(primary.artist, primary.album) if primary else None
 
             if primary_key and primary_key in research_data:
                 yield f"event: progress\ndata: {json.dumps({'step': 'extracting_facts', 'message': 'Analyzing research sources...'})}\n\n"
@@ -1104,6 +1132,8 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                     logger.warning("Fact extraction failed: %s", e)
 
             # Step 4: Write pitches (with research data, extracted facts, and familiarity)
+            if await _check_disconnect():
+                return
             yield f"event: progress\ndata: {json.dumps({'step': 'writing', 'message': 'Writing the pitch...'})}\n\n"
 
             recommendations = await asyncio.to_thread(
@@ -1120,6 +1150,8 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
             )
 
             # Step 5: Validate primary pitch (only if we have extracted facts)
+            if await _check_disconnect():
+                return
             if primary and primary_key and primary_key in extracted_facts:
                 yield f"event: progress\ndata: {json.dumps({'step': 'validating', 'message': 'Fact-checking the pitch...'})}\n\n"
 
@@ -1261,6 +1293,9 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
 # =============================================================================
 
 
+_VALID_RESULT_TYPES = {"prompt_playlist", "seed_playlist", "album_recommendation"}
+
+
 @app.get("/api/results", response_model=ResultListResponse)
 async def list_results(
     type: str | None = Query(None, description="Filter by type (comma-separated)"),
@@ -1268,6 +1303,11 @@ async def list_results(
     offset: int = Query(0, ge=0),
 ) -> ResultListResponse:
     """List saved results for the history view."""
+    if type:
+        requested = {t.strip() for t in type.split(",")}
+        invalid = requested - _VALID_RESULT_TYPES
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Invalid result type: {', '.join(sorted(invalid))}")
     results, total = await asyncio.to_thread(
         library_cache.list_results, result_type=type, limit=limit, offset=offset
     )
@@ -1335,13 +1375,16 @@ async def get_album_art(rating_key: str):
                     media_type=response.headers.get("content-type", "image/jpeg"),
                 )
         except Exception:
-            pass
+            logger.debug("Plex art proxy failed for rating_key=%s", rating_key, exc_info=True)
 
     raise HTTPException(status_code=404, detail="Art not available")
 
 
-# Allowlist of external art domains (Cover Art Archive CDN)
-_EXTERNAL_ART_DOMAINS = {"coverartarchive.org", "archive.org", "ia600.us.archive.org"}
+# Allowlist of external art domains (Cover Art Archive CDN).
+# Tightened to coverartarchive.org + IA image servers (ia*.us.archive.org) only,
+# rather than all of archive.org.
+_EXTERNAL_ART_DOMAINS = {"coverartarchive.org"}
+_IA_IMAGE_SERVER_RE = re.compile(r"^ia\d+\.us\.archive\.org$")
 
 
 @app.get("/api/external-art")
@@ -1354,20 +1397,45 @@ async def get_external_art(url: str = Query(...)):
     if parsed.scheme != "https":
         raise HTTPException(status_code=400, detail="Only HTTPS URLs allowed")
     hostname = parsed.hostname or ""
-    if not any(hostname == d or hostname.endswith(f".{d}") for d in _EXTERNAL_ART_DOMAINS):
+    allowed = (
+        any(hostname == d or hostname.endswith(f".{d}") for d in _EXTERNAL_ART_DOMAINS)
+        or bool(_IA_IMAGE_SERVER_RE.match(hostname))
+    )
+    if not allowed:
         raise HTTPException(status_code=400, detail="Domain not allowed")
 
     try:
         client = await _get_art_proxy_client()
-        response = await client.get(url, follow_redirects=True)
-        if response.status_code == 200:
-            return Response(
-                content=response.content,
-                media_type=response.headers.get("content-type", "image/jpeg"),
-                headers={"Cache-Control": "public, max-age=86400"},
-            )
+        # Follow redirects manually with domain re-validation on each hop
+        current_url = url
+        for _ in range(5):
+            response = await client.get(current_url, follow_redirects=False)
+            if response.status_code == 200:
+                return Response(
+                    content=response.content,
+                    media_type=response.headers.get("content-type", "image/jpeg"),
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+            if response.status_code in (301, 302, 303, 307, 308):
+                redirect_url = response.headers.get("location", "")
+                if not redirect_url:
+                    break
+                redirect_parsed = urlparse(redirect_url)
+                redir_host = redirect_parsed.hostname or ""
+                redir_allowed = (
+                    redirect_parsed.scheme == "https"
+                    and (
+                        any(redir_host == d or redir_host.endswith(f".{d}") for d in _EXTERNAL_ART_DOMAINS)
+                        or bool(_IA_IMAGE_SERVER_RE.match(redir_host))
+                    )
+                )
+                if not redir_allowed:
+                    break  # Redirect to disallowed domain
+                current_url = redirect_url
+            else:
+                break
     except Exception:
-        pass
+        logger.debug("External art proxy failed for url=%s", url, exc_info=True)
 
     raise HTTPException(status_code=404, detail="Art not available")
 
