@@ -5,23 +5,24 @@
 [![GHCR](https://img.shields.io/badge/ghcr-ecwilsonaz%2Fmediasage-blue)](https://ghcr.io/ecwilsonaz/mediasage)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 
-**AI-powered playlist generation for Plex—using only tracks you actually own.**
+**AI-powered playlists and album recommendations for Plex—using only music you actually own.**
 
-MediaSage is a self-hosted web app that creates music playlists by combining LLM intelligence with your Plex library. Every track it suggests is guaranteed playable because it only considers music you have.
+MediaSage is a self-hosted web app that creates playlists and recommends albums by combining LLM intelligence with your Plex library. Every suggestion is guaranteed playable because it only considers music you have.
 
-![MediaSage Screenshot](docs/images/screenshot-results.png)
+*Sample Generated Playlist:*
+![MediaSage Screenshot](docs/images/screenshot-playlist.png)
 
-## Demo
+*Sample Generated Album Recommendation:*
+![MediaSage Screenshot](docs/images/screenshot-album.png)
 
-### Prompt-Based Flow
-Describe what you want in natural language, refine filters, and generate a playlist:
+*Home Screen:*
+![MediaSage Screenshot](docs/images/screenshot-home.png)
 
-![Prompt-based flow demo](https://github.com/user-attachments/assets/ae605d5a-676b-49ea-ae3a-3da79b01a97f)
+*Playlist Flow:*
+![MediaSage Screenshot](docs/images/screenshot-playlist-start.png)
 
-### Seed-Based Flow
-Start from a song you love and explore its musical dimensions:
-
-![Seed-based flow demo](https://github.com/user-attachments/assets/0812a847-7d4a-4bf6-8d45-581a137fd71f)
+*Album Flow:*
+![MediaSage Screenshot](docs/images/screenshot-album-start.png)
 
 ---
 
@@ -31,22 +32,21 @@ Start from a song you love and explore its musical dimensions:
 docker run -d \
   --name mediasage \
   -p 5765:5765 \
-  -e PLEX_URL=http://your-plex-server:32400 \
-  -e PLEX_TOKEN=your-plex-token \
-  -e GEMINI_API_KEY=your-gemini-key \
+  -v mediasage-data:/app/data \
   --restart unless-stopped \
   ghcr.io/ecwilsonaz/mediasage:latest
 ```
 
-Open **http://localhost:5765** and start creating playlists.
+Open **http://localhost:5765** — a setup wizard walks you through connecting Plex, choosing an AI provider, and syncing your library.
 
-**Requirements:** Docker, a Plex server with music, a [Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/), and an API key from Google, Anthropic, or OpenAI.
+You can also pass credentials as environment variables to skip the wizard. See [Configuration](#configuration) for details.
+
+**Requirements:** Docker, a Plex server with music, a [Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/), and an API key from Google, Anthropic, or OpenAI (or a local model via Ollama).
 
 ---
 
 ## Contents
 
-- [Demo](#demo)
 - [Why MediaSage?](#why-mediasage)
 - [Features](#features)
 - [Installation](#installation)
@@ -79,7 +79,9 @@ The result: every track in every playlist exists in your Plex library and plays 
 
 ## Features
 
-### Two Ways to Start
+### Playlist Generation
+
+Create playlists two ways:
 
 **Describe what you want** — Natural language prompts like:
 - "Melancholy 90s alternative for a rainy day"
@@ -87,6 +89,16 @@ The result: every track in every playlist exists in your Plex library and plays 
 - "Late night electronic, nothing too aggressive"
 
 **Start from a song** — Pick a track you love, then explore musical dimensions: mood, era, instrumentation, genre, production style. Select which qualities you want more of.
+
+### Album Recommendations
+
+Describe a mood or moment, answer two quick questions about your preferences, and get a single perfect album to listen to—with an editorial pitch explaining why it fits.
+
+- **Library mode** — recommends albums you own, ready for instant playback
+- **Discovery mode** — suggests albums you don't own yet, based on your taste profile
+- **Familiarity control** — choose between comfort picks, hidden gems, or rediscoveries
+- **Show Me Another** — regenerate without starting over
+- Primary recommendation with a full write-up, plus two secondary picks
 
 ### Smart Filtering
 
@@ -100,9 +112,9 @@ Real-time track counts show exactly how your filters narrow results.
 
 ### Local Library Cache
 
-MediaSage syncs your Plex library to a local SQLite database. After a one-time sync (~2 min for 18,000 tracks), all library operations—filtering by genre, counting tracks, sending to AI—happen locally in milliseconds instead of waiting on Plex.
+MediaSage syncs your Plex library to a local SQLite database. After a one-time sync (~2 min for 18,000 tracks), all library operations—filtering, counting, sending to AI—happen locally in milliseconds instead of waiting on Plex.
 
-- **First run** shows a progress modal while syncing
+- **Setup wizard** walks you through first-run configuration and sync
 - **Footer status** shows track count and last sync time
 - **Auto-refresh** keeps cache current (syncs if >24h stale)
 - **Manual refresh** available anytime
@@ -465,6 +477,10 @@ Interactive documentation available at `/docs` when running.
 |----------|--------|-------------|
 | `/api/health` | GET | Health check |
 | `/api/config` | GET/POST | Get or update configuration |
+| `/api/setup/status` | GET | Onboarding checklist state |
+| `/api/setup/validate-plex` | POST | Validate Plex credentials |
+| `/api/setup/validate-ai` | POST | Validate AI provider credentials |
+| `/api/setup/complete` | POST | Mark setup wizard as complete |
 | `/api/library/stats` | GET | Library statistics |
 | `/api/library/status` | GET | Cache state, track count, sync progress |
 | `/api/library/sync` | POST | Trigger background library sync |
@@ -476,6 +492,13 @@ Interactive documentation available at `/docs` when running.
 | `/api/generate/stream` | POST | Stream playlist generation (SSE) |
 | `/api/playlist` | POST | Save playlist to Plex |
 | `/api/playlist/update` | POST | Replace or append to a playlist |
+| `/api/recommend/albums/preview` | GET | Preview album candidates for filters |
+| `/api/recommend/analyze-prompt` | POST | Analyze prompt for genre/decade filters |
+| `/api/recommend/questions` | POST | Generate clarifying questions |
+| `/api/recommend/generate` | POST | Generate album recommendations |
+| `/api/recommend/switch-mode` | POST | Switch library/discovery mode |
+| `/api/results` | GET | List saved result history |
+| `/api/results/{id}` | GET/DELETE | Get or delete a saved result |
 | `/api/plex/clients` | GET | List active Plex clients |
 | `/api/plex/playlists` | GET | List existing Plex playlists |
 | `/api/play-queue` | POST | Send tracks to a Plex client |
