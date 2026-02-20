@@ -141,8 +141,8 @@ class LLMClient:
     def _complete_openai(
         self, prompt: str, system: str, model: str
     ) -> LLMResponse:
-        """Make a completion request to OpenAI."""
-        logger.info("Calling OpenAI API with %d char prompt", len(prompt))
+        """Make a completion request to OpenAI or custom OpenAI-compatible endpoint."""
+        logger.info("Calling OpenAI-compatible API with %d char prompt", len(prompt))
         response = self._client.chat.completions.create(
             model=model,
             max_tokens=8192,
@@ -151,13 +151,16 @@ class LLMClient:
                 {"role": "user", "content": prompt},
             ],
         )
-        logger.debug("OpenAI response received")
+        logger.debug("OpenAI-compatible response received")
 
         content = response.choices[0].message.content
+        # Use getattr for safe token access (custom providers may omit usage)
+        input_tokens = getattr(response.usage, "prompt_tokens", 0) if response.usage else 0
+        output_tokens = getattr(response.usage, "completion_tokens", 0) if response.usage else 0
         return LLMResponse(
             content=content,
-            input_tokens=response.usage.prompt_tokens,
-            output_tokens=response.usage.completion_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             model=model,
         )
 
@@ -276,54 +279,16 @@ class LLMClient:
             model=model,
         )
 
-    def _complete_custom(
-        self, prompt: str, system: str, model: str
-    ) -> LLMResponse:
-        """Make a completion request to a custom OpenAI-compatible endpoint.
-
-        Args:
-            prompt: User prompt
-            system: System prompt
-            model: Model name
-
-        Returns:
-            LLMResponse with content and token counts
-        """
-        logger.info("Calling custom API with %d char prompt", len(prompt))
-        response = self._client.chat.completions.create(
-            model=model,
-            max_tokens=8192,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        logger.debug("Custom API response received")
-
-        content = response.choices[0].message.content
-        # Token counts may not be available from all custom providers
-        input_tokens = getattr(response.usage, "prompt_tokens", 0) if response.usage else 0
-        output_tokens = getattr(response.usage, "completion_tokens", 0) if response.usage else 0
-
-        return LLMResponse(
-            content=content,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            model=model,
-        )
-
     def _complete(self, prompt: str, system: str, model: str) -> LLMResponse:
         """Make a completion request to the configured provider."""
         if self.provider == "anthropic":
             return self._complete_anthropic(prompt, system, model)
-        elif self.provider == "openai":
+        elif self.provider in ("openai", "custom"):
             return self._complete_openai(prompt, system, model)
         elif self.provider == "gemini":
             return self._complete_gemini(prompt, system, model)
         elif self.provider == "ollama":
             return self._complete_ollama(prompt, system, model)
-        elif self.provider == "custom":
-            return self._complete_custom(prompt, system, model)
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
 

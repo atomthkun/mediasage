@@ -30,7 +30,6 @@ from backend.models import (
     FilterPreviewRequest,
     FilterPreviewResponse,
     GenerateRequest,
-    GenerateResponse,
     HealthResponse,
     LibraryCacheStatusResponse,
     LibraryStatsResponse,
@@ -73,7 +72,7 @@ from backend.llm_client import (
 )
 from backend.models import OllamaModelsResponse, OllamaModelInfo, OllamaStatus
 from backend.analyzer import analyze_prompt as do_analyze_prompt, analyze_track as do_analyze_track
-from backend.generator import generate_playlist as do_generate_playlist, generate_playlist_stream
+from backend.generator import generate_playlist_stream
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -131,65 +130,29 @@ app = FastAPI(
 
 
 # =============================================================================
-# Health Endpoint
+# Config Helpers
 # =============================================================================
 
 
-@app.get("/api/health", response_model=HealthResponse)
-async def health_check() -> HealthResponse:
-    """Check application health status."""
-    config = get_config()
-    plex_client = get_plex_client()
-
-    # Check actual Plex connection
-    plex_connected = plex_client.is_connected() if plex_client else False
-
-    # Check if LLM is configured (API key for cloud, URL for local providers)
-    llm_configured = bool(config.llm.api_key)
+def _is_llm_configured(config) -> bool:
+    """Check if an LLM provider is configured (API key for cloud, URL for local)."""
     if config.llm.provider == "ollama" and config.llm.ollama_url:
-        llm_configured = True
-    elif config.llm.provider == "custom" and config.llm.custom_url:
-        llm_configured = True
-
-    return HealthResponse(
-        status="healthy",
-        plex_connected=plex_connected,
-        llm_configured=llm_configured,
-    )
+        return True
+    if config.llm.provider == "custom" and config.llm.custom_url:
+        return True
+    return bool(config.llm.api_key)
 
 
-# =============================================================================
-# Configuration Endpoints
-# =============================================================================
-
-
-@app.get("/api/config", response_model=ConfigResponse)
-async def get_configuration() -> ConfigResponse:
-    """Get current configuration (without secrets)."""
-    config = get_config()
-    plex_client = get_plex_client()
-
-    # Calculate recommended max tracks/albums based on generation model
+def _build_config_response(config, plex_client) -> ConfigResponse:
+    """Build a ConfigResponse from the current config and Plex client state."""
     generation_model = config.llm.model_generation
     analysis_model = config.llm.model_analysis
     max_tracks = get_max_tracks_for_model(generation_model, config=config.llm)
     max_albums = get_max_albums_for_model(generation_model, config=config.llm)
 
-    # Get cost rates for both models (for client-side cost calculation)
-    # Local providers have zero cost
     is_local = config.llm.provider in ("ollama", "custom")
     gen_costs = get_model_cost(generation_model, config.llm)
     analysis_costs = get_model_cost(analysis_model, config.llm)
-
-    # LLM is configured if we have an API key OR if using a local provider with URL
-    llm_configured = bool(config.llm.api_key)
-    if config.llm.provider == "ollama" and config.llm.ollama_url:
-        llm_configured = True
-    elif config.llm.provider == "custom" and config.llm.custom_url:
-        llm_configured = True
-
-    # Check if provider is being set by environment variable
-    provider_from_env = os.environ.get("LLM_PROVIDER") is not None
 
     return ConfigResponse(
         version=get_version(),
@@ -198,7 +161,7 @@ async def get_configuration() -> ConfigResponse:
         plex_token_set=bool(config.plex.token),
         music_library=config.plex.music_library,
         llm_provider=config.llm.provider,
-        llm_configured=llm_configured,
+        llm_configured=_is_llm_configured(config),
         llm_api_key_set=bool(config.llm.api_key),
         model_analysis=analysis_model,
         model_generation=generation_model,
@@ -214,14 +177,42 @@ async def get_configuration() -> ConfigResponse:
         custom_url=config.llm.custom_url,
         custom_context_window=config.llm.custom_context_window,
         is_local_provider=is_local,
-        provider_from_env=provider_from_env,
+        provider_from_env=os.environ.get("LLM_PROVIDER") is not None,
     )
+
+
+# =============================================================================
+# Health Endpoint
+# =============================================================================
+
+
+@app.get("/api/health", response_model=HealthResponse)
+async def health_check() -> HealthResponse:
+    """Check application health status."""
+    config = get_config()
+    plex_client = get_plex_client()
+
+    return HealthResponse(
+        status="healthy",
+        plex_connected=plex_client.is_connected() if plex_client else False,
+        llm_configured=_is_llm_configured(config),
+    )
+
+
+# =============================================================================
+# Configuration Endpoints
+# =============================================================================
+
+
+@app.get("/api/config", response_model=ConfigResponse)
+async def get_configuration() -> ConfigResponse:
+    """Get current configuration (without secrets)."""
+    return _build_config_response(get_config(), get_plex_client())
 
 
 @app.post("/api/config", response_model=ConfigResponse)
 async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
     """Update configuration values."""
-    # Convert request to dict, filtering out None values
     updates = {
         k: v
         for k, v in request.model_dump().items()
@@ -231,7 +222,6 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
     if not updates:
         raise HTTPException(status_code=400, detail="No configuration values provided")
 
-    # Update config
     try:
         config = update_config_values(updates)
     except ConfigSaveError as e:
@@ -248,55 +238,7 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
     if any(k in updates for k in ["llm_provider", "llm_api_key", "model_analysis", "model_generation", "ollama_url", "custom_url"]):
         init_llm_client(config.llm)
 
-    plex_client = get_plex_client()
-
-    # Calculate recommended max tracks/albums based on generation model
-    generation_model = config.llm.model_generation
-    analysis_model = config.llm.model_analysis
-    max_tracks = get_max_tracks_for_model(generation_model, config=config.llm)
-    max_albums = get_max_albums_for_model(generation_model, config=config.llm)
-
-    # Get cost rates for both models (for client-side cost calculation)
-    # Local providers have zero cost
-    is_local = config.llm.provider in ("ollama", "custom")
-    gen_costs = get_model_cost(generation_model, config.llm)
-    analysis_costs = get_model_cost(analysis_model, config.llm)
-
-    # LLM is configured if we have an API key OR if using a local provider with URL
-    llm_configured = bool(config.llm.api_key)
-    if config.llm.provider == "ollama" and config.llm.ollama_url:
-        llm_configured = True
-    elif config.llm.provider == "custom" and config.llm.custom_url:
-        llm_configured = True
-
-    # Check if provider is being set by environment variable
-    provider_from_env = os.environ.get("LLM_PROVIDER") is not None
-
-    return ConfigResponse(
-        version=get_version(),
-        plex_url=config.plex.url,
-        plex_connected=plex_client.is_connected() if plex_client else False,
-        plex_token_set=bool(config.plex.token),
-        music_library=config.plex.music_library,
-        llm_provider=config.llm.provider,
-        llm_configured=llm_configured,
-        llm_api_key_set=bool(config.llm.api_key),
-        model_analysis=analysis_model,
-        model_generation=generation_model,
-        max_tracks_to_ai=max_tracks,
-        max_albums_to_ai=max_albums,
-        cost_per_million_input=gen_costs["input"],
-        cost_per_million_output=gen_costs["output"],
-        analysis_cost_per_million_input=analysis_costs["input"],
-        analysis_cost_per_million_output=analysis_costs["output"],
-        defaults=config.defaults,
-        ollama_url=config.llm.ollama_url,
-        ollama_context_window=config.llm.ollama_context_window,
-        custom_url=config.llm.custom_url,
-        custom_context_window=config.llm.custom_context_window,
-        is_local_provider=is_local,
-        provider_from_env=provider_from_env,
-    )
+    return _build_config_response(config, get_plex_client())
 
 
 # =============================================================================
@@ -567,49 +509,6 @@ async def preview_filters(request: FilterPreviewRequest) -> FilterPreviewRespons
 # =============================================================================
 # Generation Endpoints
 # =============================================================================
-
-
-@app.post("/api/generate", response_model=GenerateResponse)
-async def generate_playlist(request: GenerateRequest) -> GenerateResponse:
-    """Generate a playlist."""
-    plex_client = get_plex_client()
-    llm_client = get_llm_client()
-
-    if not plex_client or not plex_client.is_connected():
-        raise HTTPException(status_code=503, detail="Plex not connected")
-    if not llm_client:
-        raise HTTPException(status_code=503, detail="LLM not configured")
-
-    # Get seed track if provided
-    seed_track = None
-    selected_dimensions = None
-    if request.seed_track:
-        seed_track = await asyncio.to_thread(
-            plex_client.get_track_by_key, request.seed_track.rating_key
-        )
-        if not seed_track:
-            raise HTTPException(status_code=404, detail="Seed track not found")
-        selected_dimensions = request.seed_track.selected_dimensions
-
-    try:
-        return await asyncio.to_thread(
-            do_generate_playlist,
-            prompt=request.prompt,
-            seed_track=seed_track,
-            selected_dimensions=selected_dimensions,
-            additional_notes=request.additional_notes,
-            refinement_answers=request.refinement_answers,
-            genres=request.genres,
-            decades=request.decades,
-            track_count=request.track_count,
-            exclude_live=request.exclude_live,
-            min_rating=request.min_rating,
-            max_tracks_to_ai=request.max_tracks_to_ai,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
 
 
 @app.post("/api/generate/stream")

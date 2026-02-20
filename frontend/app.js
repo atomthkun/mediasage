@@ -241,10 +241,6 @@ async function updateConfig(updates) {
     });
 }
 
-async function fetchHealth() {
-    return apiCall('/health');
-}
-
 // =============================================================================
 // Ollama API Calls
 // =============================================================================
@@ -276,13 +272,6 @@ async function analyzeTrack(ratingKey) {
     return apiCall('/analyze/track', {
         method: 'POST',
         body: JSON.stringify({ rating_key: ratingKey }),
-    });
-}
-
-async function generatePlaylist(request) {
-    return apiCall('/generate', {
-        method: 'POST',
-        body: JSON.stringify(request),
     });
 }
 
@@ -2122,11 +2111,7 @@ function showSuccessModal(name, trackCount, playlistUrl) {
 }
 
 function dismissSuccessModal() {
-    // Just hide the modal, don't reset state - user can continue with playlist
-    const modal = document.getElementById('success-modal');
-    modal.classList.add('hidden');
-    removeNoScrollIfNoModals();
-    focusManager.closeModal(modal);
+    dismissModal('success-modal');
 }
 
 function resetPlaylistState() {
@@ -3273,34 +3258,20 @@ function removeNoScrollIfNoModals() {
     }
 }
 
-function dismissClientPicker() {
-    const modal = document.getElementById('client-picker-modal');
+function dismissModal(id, afterDismiss) {
+    const modal = document.getElementById(id);
     modal.classList.add('hidden');
     removeNoScrollIfNoModals();
     focusManager.closeModal(modal);
+    if (afterDismiss) afterDismiss();
 }
 
-function dismissPlayChoice() {
-    const modal = document.getElementById('play-choice-modal');
-    modal.classList.add('hidden');
-    removeNoScrollIfNoModals();
-    focusManager.closeModal(modal);
-    state._pendingClientId = null;
-}
-
-function dismissPlaySuccess() {
-    const modal = document.getElementById('play-success-modal');
-    modal.classList.add('hidden');
-    removeNoScrollIfNoModals();
-    focusManager.closeModal(modal);
-}
-
-function dismissUpdateSuccess() {
-    const modal = document.getElementById('update-success-modal');
-    modal.classList.add('hidden');
-    removeNoScrollIfNoModals();
-    focusManager.closeModal(modal);
-}
+function dismissClientPicker() { dismissModal('client-picker-modal'); }
+function dismissPlayChoice() { dismissModal('play-choice-modal', () => { state._pendingClientId = null; }); }
+function dismissPlaySuccess() { dismissModal('play-success-modal'); }
+function dismissUpdateSuccess() { dismissModal('update-success-modal'); }
+function dismissRecRestartModal() { dismissModal('rec-restart-modal'); }
+function dismissPlaylistRestartModal() { dismissModal('playlist-restart-modal'); }
 
 function openRecRestartModal() {
     const modal = document.getElementById('rec-restart-modal');
@@ -3309,25 +3280,11 @@ function openRecRestartModal() {
     focusManager.openModal(modal);
 }
 
-function dismissRecRestartModal() {
-    const modal = document.getElementById('rec-restart-modal');
-    modal.classList.add('hidden');
-    removeNoScrollIfNoModals();
-    focusManager.closeModal(modal);
-}
-
 function openPlaylistRestartModal() {
     const modal = document.getElementById('playlist-restart-modal');
     modal.classList.remove('hidden');
     lockScroll();
     focusManager.openModal(modal);
-}
-
-function dismissPlaylistRestartModal() {
-    const modal = document.getElementById('playlist-restart-modal');
-    modal.classList.add('hidden');
-    removeNoScrollIfNoModals();
-    focusManager.closeModal(modal);
 }
 
 function getClientStatusText(client) {

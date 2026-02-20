@@ -1,19 +1,31 @@
 """Tests for playlist generation."""
 
 import json
-import pytest
 from unittest.mock import MagicMock, patch
 
 
+def _parse_sse_events(generator):
+    """Parse SSE events from generate_playlist_stream into (event, data) tuples."""
+    events = []
+    for raw in generator:
+        if raw.startswith(":"):
+            continue  # SSE comment (heartbeat)
+        for line in raw.strip().split("\n"):
+            if line.startswith("event: "):
+                event_type = line[len("event: "):]
+            elif line.startswith("data: "):
+                events.append((event_type, json.loads(line[len("data: "):])))
+    return events
+
+
 class TestPlaylistGeneration:
-    """Tests for playlist generation."""
+    """Tests for playlist generation (streaming)."""
 
     def test_generate_validates_tracks_against_library(self, mocker, mock_plex_tracks):
         """Generated playlist should only contain tracks from library."""
-        from backend.generator import generate_playlist
+        from backend.generator import generate_playlist_stream
         from backend.llm_client import LLMResponse
 
-        # LLM returns tracks that are in the library
         mock_response = LLMResponse(
             content=json.dumps([
                 {"artist": "Radiohead", "album": "The Bends", "title": "Fake Plastic Trees"},
@@ -27,7 +39,14 @@ class TestPlaylistGeneration:
         with patch("backend.generator.get_llm_client") as mock_llm:
             mock_client = MagicMock()
             mock_client.generate.return_value = mock_response
-            mock_client.parse_json_response.return_value = json.loads(mock_response.content)
+            mock_client.analyze.return_value = LLMResponse(
+                content='{"title": "Test", "narrative": "Test narrative."}',
+                input_tokens=100, output_tokens=50, model="test-model"
+            )
+            mock_client.parse_json_response.side_effect = [
+                json.loads(mock_response.content),
+                {"title": "Test", "narrative": "Test narrative."},
+            ]
             mock_llm.return_value = mock_client
 
             with patch("backend.generator.get_plex_client") as mock_plex:
@@ -35,53 +54,58 @@ class TestPlaylistGeneration:
                 mock_plex_client.get_tracks_by_filters.return_value = mock_plex_tracks[:5]
                 mock_plex.return_value = mock_plex_client
 
-                # Mock cache to be empty so we use Plex fallback
                 with patch("backend.generator.library_cache.has_cached_tracks", return_value=False):
-                    result = generate_playlist(
-                        prompt="90s alternative",
-                        genres=["Alternative", "Rock"],
-                        decades=["1990s"],
-                        track_count=25,
-                        exclude_live=True
-                    )
+                    with patch("backend.generator.library_cache.save_result", return_value="abc123"):
+                        events = _parse_sse_events(generate_playlist_stream(
+                            prompt="90s alternative",
+                            genres=["Alternative", "Rock"],
+                            decades=["1990s"],
+                            track_count=25,
+                            exclude_live=True,
+                        ))
 
-                    # All returned tracks should be from the library
-                    for track in result.tracks:
-                        assert any(
-                            t.rating_key == track.rating_key
-                            for t in mock_plex_tracks
-                        )
+                        # Collect track rating keys from track batch events
+                        track_keys = []
+                        for etype, data in events:
+                            if etype == "tracks":
+                                track_keys.extend(t["rating_key"] for t in data["batch"])
+
+                        library_keys = {t.rating_key for t in mock_plex_tracks}
+                        for key in track_keys:
+                            assert key in library_keys
 
     def test_generate_handles_empty_filter_results(self, mocker):
-        """Should handle case when no tracks match filters."""
-        from backend.generator import generate_playlist
+        """Should emit error event when no tracks match filters."""
+        from backend.generator import generate_playlist_stream
 
-        with patch("backend.generator.get_llm_client"):
+        with patch("backend.generator.get_llm_client") as mock_llm:
+            mock_llm.return_value = MagicMock()
+
             with patch("backend.generator.get_plex_client") as mock_plex:
                 mock_plex_client = MagicMock()
                 mock_plex_client.get_tracks_by_filters.return_value = []
                 mock_plex.return_value = mock_plex_client
 
-                # Mock cache to be empty so we use Plex fallback
                 with patch("backend.generator.library_cache.has_cached_tracks", return_value=False):
-                    with pytest.raises(ValueError, match="No tracks"):
-                        generate_playlist(
-                            prompt="nonexistent genre",
-                            genres=["Nonexistent"],
-                            decades=["1800s"],
-                            track_count=25,
-                            exclude_live=True
-                        )
+                    events = _parse_sse_events(generate_playlist_stream(
+                        prompt="nonexistent genre",
+                        genres=["Nonexistent"],
+                        decades=["1800s"],
+                        track_count=25,
+                        exclude_live=True,
+                    ))
+
+                    error_events = [d for t, d in events if t == "error"]
+                    assert len(error_events) == 1
+                    assert "No tracks" in error_events[0]["message"]
 
     def test_fuzzy_matching_finds_similar_titles(self, mocker, mock_plex_tracks):
         """Should fuzzy match LLM responses to library tracks."""
-        from backend.generator import generate_playlist
+        from backend.generator import generate_playlist_stream
         from backend.llm_client import LLMResponse
 
-        # LLM returns slightly different track name
         mock_response = LLMResponse(
             content=json.dumps([
-                # Note: "Fake Plastic Tree" vs "Fake Plastic Trees"
                 {"artist": "Radiohead", "album": "The Bends", "title": "Fake Plastic Tree"},
             ]),
             input_tokens=1000,
@@ -92,7 +116,14 @@ class TestPlaylistGeneration:
         with patch("backend.generator.get_llm_client") as mock_llm:
             mock_client = MagicMock()
             mock_client.generate.return_value = mock_response
-            mock_client.parse_json_response.return_value = json.loads(mock_response.content)
+            mock_client.analyze.return_value = LLMResponse(
+                content='{"title": "Test", "narrative": "Test."}',
+                input_tokens=100, output_tokens=50, model="test-model"
+            )
+            mock_client.parse_json_response.side_effect = [
+                json.loads(mock_response.content),
+                {"title": "Test", "narrative": "Test."},
+            ]
             mock_llm.return_value = mock_client
 
             with patch("backend.generator.get_plex_client") as mock_plex:
@@ -100,19 +131,19 @@ class TestPlaylistGeneration:
                 mock_plex_client.get_tracks_by_filters.return_value = mock_plex_tracks[:5]
                 mock_plex.return_value = mock_plex_client
 
-                # Mock cache to be empty so we use Plex fallback
                 with patch("backend.generator.library_cache.has_cached_tracks", return_value=False):
-                    result = generate_playlist(
-                        prompt="radiohead",
-                        genres=["Alternative"],
-                        decades=["1990s"],
-                        track_count=25,
-                        exclude_live=True
-                    )
+                    with patch("backend.generator.library_cache.save_result", return_value="abc123"):
+                        events = _parse_sse_events(generate_playlist_stream(
+                            prompt="radiohead",
+                            genres=["Alternative"],
+                            decades=["1990s"],
+                            track_count=25,
+                            exclude_live=True,
+                        ))
 
-                    # Should still match the track despite slight title difference
-                    # (implementation will use fuzzy matching)
-                    assert len(result.tracks) >= 0  # May or may not match depending on threshold
+                        # Should complete without error
+                        error_events = [d for t, d in events if t == "error"]
+                        assert len(error_events) == 0
 
 
 class TestTrackMatching:

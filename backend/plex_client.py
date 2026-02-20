@@ -429,38 +429,6 @@ class PlexClient:
             logger.exception("Failed to query Plex library with filters: %s", filters)
             raise PlexQueryError(f"Failed to query Plex library: {e}") from e
 
-    def get_filtered_track_count(
-        self,
-        genres: list[str] | None = None,
-        decades: list[str] | None = None,
-        min_rating: int = 0,
-    ) -> int:
-        """Get count of tracks matching filter criteria (without live filtering).
-
-        Args:
-            genres: List of genre names to include
-            decades: List of decades (e.g., ["1990s", "2000s"])
-            min_rating: Minimum user rating (0-10, 0 = no filter)
-
-        Returns:
-            Count of matching tracks, or -1 if unknown
-        """
-        if not self._library:
-            return 0
-
-        try:
-            filters = self._build_filters(genres, decades, min_rating)
-
-            # If no filters, return total track count (fast path)
-            if not filters:
-                return self._library.totalViewSize(libtype="track")
-
-            # Search and count results
-            results = self._library.search(libtype="track", **filters)
-            return len(results)
-        except Exception:
-            return -1
-
     def count_tracks_by_filters(
         self,
         genres: list[str] | None = None,

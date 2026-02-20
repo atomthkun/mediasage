@@ -703,7 +703,8 @@ textarea {
     flex-wrap: wrap;
 }
 
-.limit-btn {
+.limit-btn,
+.rating-btn {
     padding: var(--spacing-xs) var(--spacing-sm);
     background: var(--bg-elevated);
     border: 1px solid var(--border);
@@ -714,11 +715,13 @@ textarea {
     transition: all var(--transition-fast);
 }
 
-.limit-btn:hover {
+.limit-btn:hover,
+.rating-btn:hover {
     background: var(--bg-hover);
 }
 
-.limit-btn.active {
+.limit-btn.active,
+.rating-btn.active {
     border-color: var(--accent);
     color: var(--accent);
 }
@@ -741,26 +744,6 @@ textarea {
     display: flex;
     gap: var(--spacing-sm);
     flex-wrap: wrap;
-}
-
-.rating-btn {
-    padding: var(--spacing-xs) var(--spacing-sm);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    cursor: pointer;
-    font-size: var(--font-size-sm);
-    transition: all var(--transition-fast);
-}
-
-.rating-btn:hover {
-    background: var(--bg-hover);
-}
-
-.rating-btn.active {
-    border-color: var(--accent);
-    color: var(--accent);
 }
 
 /* Filter Preview */

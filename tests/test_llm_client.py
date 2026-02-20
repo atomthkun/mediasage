@@ -347,7 +347,7 @@ class TestCustomProvider:
             assert client.provider == "custom"
 
     def test_complete_custom_success(self, mocker):
-        """Should make completion request to custom endpoint."""
+        """Should make completion request to custom endpoint via _complete_openai."""
         from backend.llm_client import LLMClient
         from backend.models import LLMConfig
 
@@ -371,7 +371,7 @@ class TestCustomProvider:
             mock_openai.OpenAI.return_value = mock_client
 
             client = LLMClient(config)
-            result = client._complete_custom("test prompt", "system prompt", "my-model")
+            result = client._complete_openai("test prompt", "system prompt", "my-model")
 
             assert result.content == '{"result": "test"}'
             assert result.input_tokens == 100
@@ -379,7 +379,7 @@ class TestCustomProvider:
             assert result.model == "my-model"
 
     def test_complete_dispatch_routes_to_custom(self, mocker):
-        """Should route 'custom' provider to _complete_custom method."""
+        """Should route 'custom' provider to _complete_openai method."""
         from backend.llm_client import LLMClient
         from backend.models import LLMConfig
 
@@ -394,13 +394,12 @@ class TestCustomProvider:
         with patch("backend.llm_client.openai"):
             client = LLMClient(config)
 
-        # Mock the _complete_custom method
-        mock_custom = mocker.patch.object(client, "_complete_custom")
-        mock_custom.return_value = MagicMock(content="test")
+        mock_openai_method = mocker.patch.object(client, "_complete_openai")
+        mock_openai_method.return_value = MagicMock(content="test")
 
         client._complete("test prompt", "system prompt", "my-model")
 
-        mock_custom.assert_called_once_with("test prompt", "system prompt", "my-model")
+        mock_openai_method.assert_called_once_with("test prompt", "system prompt", "my-model")
 
 
 class TestLocalProviderCosts:

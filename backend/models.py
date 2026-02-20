@@ -245,6 +245,21 @@ class GenerateResponse(BaseModel):
     track_reasons: dict[str, str] = {}
 
 
+def _validate_rating_keys(v: list[str]) -> list[str]:
+    """Validate a list of Plex rating keys (must be non-empty, all numeric)."""
+    if not v:
+        raise ValueError("At least one track is required")
+    for key in v:
+        if not key.isdigit():
+            raise ValueError(f"Invalid rating key: {key}")
+    return v
+
+
+def _truncate_description(v: str) -> str:
+    """Truncate description to 2000 chars for Plex compatibility."""
+    return v[:2000] if v else v
+
+
 class SavePlaylistRequest(BaseModel):
     """Request to save a playlist to Plex."""
 
@@ -262,17 +277,12 @@ class SavePlaylistRequest(BaseModel):
     @field_validator("description")
     @classmethod
     def truncate_description(cls, v: str) -> str:
-        return v[:2000] if v else v
+        return _truncate_description(v)
 
     @field_validator("rating_keys")
     @classmethod
     def validate_rating_keys(cls, v: list[str]) -> list[str]:
-        if not v:
-            raise ValueError("At least one track is required")
-        for key in v:
-            if not key.isdigit():
-                raise ValueError(f"Invalid rating key: {key}")
-        return v
+        return _validate_rating_keys(v)
 
 
 class SavePlaylistResponse(BaseModel):
@@ -321,7 +331,7 @@ class UpdatePlaylistRequest(BaseModel):
     @field_validator("description")
     @classmethod
     def truncate_description(cls, v: str) -> str:
-        return v[:2000] if v else v
+        return _truncate_description(v)
 
     @field_validator("playlist_id")
     @classmethod
@@ -333,12 +343,7 @@ class UpdatePlaylistRequest(BaseModel):
     @field_validator("rating_keys")
     @classmethod
     def validate_rating_keys(cls, v: list[str]) -> list[str]:
-        if not v:
-            raise ValueError("At least one track is required")
-        for key in v:
-            if not key.isdigit():
-                raise ValueError(f"Invalid rating key: {key}")
-        return v
+        return _validate_rating_keys(v)
 
 
 class UpdatePlaylistResponse(BaseModel):
@@ -370,12 +375,7 @@ class PlayQueueRequest(BaseModel):
     @field_validator("rating_keys")
     @classmethod
     def validate_rating_keys(cls, v: list[str]) -> list[str]:
-        if not v:
-            raise ValueError("At least one track is required")
-        for key in v:
-            if not key.isdigit():
-                raise ValueError(f"Invalid rating key: {key}")
-        return v
+        return _validate_rating_keys(v)
 
 
 class PlayQueueResponse(BaseModel):
