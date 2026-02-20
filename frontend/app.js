@@ -3557,7 +3557,7 @@ function setSaveMode(mode) {
     const pickerContainer = document.getElementById('playlist-picker-container');
 
     if (mode === 'new') {
-        saveBtn.innerHTML = '<span class="btn-label-long">Create Playlist</span><span class="btn-label-short">Save</span>';
+        saveBtn.innerHTML = '<span class="btn-label-long">Save to Plex</span><span class="btn-label-short">Save</span>';
         nameContainer.classList.remove('hidden');
         pickerContainer.classList.add('hidden');
     } else if (mode === 'replace') {
