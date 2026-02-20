@@ -40,7 +40,7 @@
             <div id="home-view" class="view">
                 <div class="home-content">
                     <h2 class="home-greeting">What do you want to listen to?</h2>
-                    <p class="home-subtitle">Create a playlist or discover an album from your Plex library.</p>
+                    <p class="home-subtitle">Create playlists and discover albums from your library.</p>
                     <div class="home-cards">
                         <button class="home-card" data-nav="playlist-prompt">
                             <div class="home-card-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/></svg></div>
@@ -258,7 +258,7 @@
                     <div id="step-results" class="step-panel">
                         <button id="back-to-filters-btn" class="results-back-link">&larr; Back to filters</button>
 
-                        <div class="results-header-bar">
+                        <div class="results-grid">
                             <div class="results-header-left">
                                 <div class="playlist-name-container">
                                     <input
@@ -280,44 +280,43 @@
                                     <span id="results-prompt-pill" class="prompt-pill hidden"></span>
                                 </div>
                             </div>
-                            <div class="results-header-actions">
-                                <div class="split-button-group">
-                                    <button id="save-playlist-btn" class="btn btn-primary split-button-main">
-                                        <span class="btn-label-long">Save to Plex</span><span class="btn-label-short">Save</span>
-                                    </button>
-                                    <button id="save-mode-dropdown-btn" class="btn btn-primary split-button-arrow" aria-label="Save mode options" aria-expanded="false">
-                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                                    </button>
-                                    <div id="save-mode-dropdown" class="save-mode-dropdown hidden" role="menu">
-                                        <button class="save-mode-option active" data-mode="new" role="menuitem">
-                                            <span class="save-mode-check">&#10003;</span> Save new playlist
+                            <div class="results-sidebar">
+                                <div class="results-header-actions">
+                                    <div class="split-button-group">
+                                        <button id="save-playlist-btn" class="btn btn-primary split-button-main">
+                                            <span class="btn-label-long">Save to Plex</span><span class="btn-label-short">Save</span>
                                         </button>
-                                        <button class="save-mode-option" data-mode="replace" role="menuitem">
-                                            <span class="save-mode-check"></span> Replace a playlist
+                                        <button id="save-mode-dropdown-btn" class="btn btn-primary split-button-arrow" aria-label="Save mode options" aria-expanded="false">
+                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                                         </button>
-                                        <button class="save-mode-option" data-mode="append" role="menuitem">
-                                            <span class="save-mode-check"></span> Append to a playlist
-                                        </button>
+                                        <div id="save-mode-dropdown" class="save-mode-dropdown hidden" role="menu">
+                                            <button class="save-mode-option active" data-mode="new" role="menuitem">
+                                                <span class="save-mode-check">&#10003;</span> Save new playlist
+                                            </button>
+                                            <button class="save-mode-option" data-mode="replace" role="menuitem">
+                                                <span class="save-mode-check"></span> Replace a playlist
+                                            </button>
+                                            <button class="save-mode-option" data-mode="append" role="menuitem">
+                                                <span class="save-mode-check"></span> Append to a playlist
+                                            </button>
+                                        </div>
                                     </div>
+                                    <button id="play-now-btn" class="btn btn-secondary btn-play-now">
+                                        &#9654; Play Now
+                                    </button>
+                                    <button id="playlist-start-over" class="rec-action-link rec-action-link--subtle">Start over</button>
                                 </div>
-                                <button id="play-now-btn" class="btn btn-secondary btn-play-now">
-                                    &#9654; Play Now
-                                </button>
-                                <button id="playlist-start-over" class="rec-action-link rec-action-link--subtle">Start over</button>
+                                <aside id="track-reason-panel" class="track-reason-panel">
+                                    <div class="reason-placeholder">Click a track to see why it was chosen</div>
+                                    <div class="reason-content hidden">
+                                        <div class="reason-album-art-container"></div>
+                                        <div class="reason-track-title"></div>
+                                        <div class="reason-track-artist"></div>
+                                        <p class="reason-text"></p>
+                                    </div>
+                                </aside>
                             </div>
-                        </div>
-
-                        <div class="results-layout">
                             <div id="playlist-tracks" class="playlist-tracks" role="listbox" aria-label="Generated playlist"></div>
-                            <aside id="track-reason-panel" class="track-reason-panel">
-                                <div class="reason-placeholder">Click a track to see why it was chosen</div>
-                                <div class="reason-content hidden">
-                                    <div class="reason-album-art-container"></div>
-                                    <div class="reason-track-title"></div>
-                                    <div class="reason-track-artist"></div>
-                                    <p class="reason-text"></p>
-                                </div>
-                            </aside>
                         </div>
 
                     </div>

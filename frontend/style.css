@@ -235,7 +235,7 @@ body {
     align-items: center;
     gap: var(--spacing-sm);
     width: 100%;
-    padding: 10px 12px;
+    padding: 10px var(--spacing-sm);
     border: none;
     background: transparent;
     color: var(--text-primary);
@@ -302,6 +302,10 @@ body {
 .home-card:hover {
     border-color: var(--accent);
     background: var(--bg-tertiary);
+}
+
+.home-card:hover .home-card-icon {
+    color: var(--accent);
 }
 
 .home-card-icon {
@@ -1024,19 +1028,32 @@ textarea {
     color: var(--accent);
 }
 
-/* Results — Header Bar (same grid as results-layout) */
-.results-header-bar {
+/* Results — Unified Grid */
+.results-grid {
     display: grid;
     grid-template-columns: 1fr var(--detail-panel-width);
+    grid-template-rows: auto 1fr;
+    grid-template-areas:
+        "header  sidebar"
+        "tracks  sidebar";
     gap: var(--spacing-lg);
-    align-items: start;
-    padding-bottom: var(--spacing-md);
-    margin-bottom: var(--spacing-md);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .results-header-left {
+    grid-area: header;
     min-width: 0;
+    padding-bottom: var(--spacing-md);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.results-sidebar {
+    grid-area: sidebar;
+    position: sticky;
+    top: var(--spacing-md);
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-lg);
 }
 
 .results-header-actions {
@@ -1117,43 +1134,12 @@ textarea {
     outline: none;
 }
 
-/* Results Layout with Side Panel */
-.results-layout {
-    display: grid;
-    grid-template-columns: 1fr var(--detail-panel-width);
-    gap: var(--spacing-lg);
-}
-
 .playlist-tracks {
+    grid-area: tracks;
     display: flex;
     flex-direction: column;
     gap: var(--spacing-sm);
-    max-height: calc(100vh - 340px);
-    overflow-y: auto;
-    flex: 1;
     min-width: 0;
-    padding-right: var(--spacing-md);
-    /* Firefox */
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-}
-
-/* Chrome, Safari, Edge */
-.playlist-tracks::-webkit-scrollbar {
-    width: 6px;
-}
-
-.playlist-tracks::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.playlist-tracks::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 3px;
-}
-
-.playlist-tracks::-webkit-scrollbar-thumb:hover {
-    background: var(--text-muted);
 }
 
 /* Track Reason Side Panel (Desktop) */
@@ -1161,9 +1147,6 @@ textarea {
     background: var(--bg-secondary);
     border-radius: var(--radius-lg);
     padding: var(--spacing-md);
-    position: sticky;
-    top: var(--spacing-md);
-    align-self: flex-start;
 }
 
 .reason-placeholder {
@@ -1223,43 +1206,38 @@ textarea {
 
 /* Tablet: narrower detail panel */
 @media (min-width: 769px) and (max-width: 1023px) {
-    .results-header-bar,
-    .results-layout {
+    .results-grid {
         grid-template-columns: 1fr var(--detail-panel-width-narrow);
     }
 }
 
 /* Mobile: single column, hide detail panel */
 @media (max-width: 768px) {
-    .results-layout {
+    .results-grid {
         grid-template-columns: 1fr;
+        grid-template-areas:
+            "header"
+            "sidebar"
+            "tracks";
+    }
+
+    .results-sidebar {
+        position: static;
     }
 
     .track-reason-panel {
         display: none;
     }
 
-    .results-header-bar {
-        grid-template-columns: 1fr;
-        gap: var(--spacing-sm);
-        margin-bottom: var(--spacing-lg);
-    }
-
     .results-header-actions {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: var(--spacing-sm);
-        margin-top: var(--spacing-md);
     }
 
     .results-header-actions > #playlist-start-over {
         grid-column: 1 / -1;
         justify-self: center;
-    }
-
-    .playlist-tracks {
-        max-height: calc(100vh - 400px);
-        padding-right: 0;
     }
 
     .playlist-name-input {
@@ -2480,12 +2458,13 @@ body.no-scroll {
     .home-subtitle {
         font-size: 0.875rem;
         margin-bottom: 16px;
+        text-wrap: balance;
     }
 
     .home-cards {
         grid-template-columns: 1fr;
         gap: 8px;
-        margin-bottom: 16px;
+        margin-bottom: 20px;
     }
 
     /* Horizontal compact card layout */
@@ -2493,7 +2472,7 @@ body.no-scroll {
         display: flex;
         align-items: center;
         gap: 16px;
-        padding: 16px;
+        padding: 12px 16px;
         text-align: left;
     }
 
@@ -3271,7 +3250,7 @@ body.no-scroll {
 
 .history-card:hover .history-card-icon {
     background: var(--bg-hover);
-    color: var(--text-primary);
+    color: var(--accent);
 }
 
 .history-card-body {
@@ -3411,6 +3390,9 @@ body.no-scroll {
 
 /* Mobile overrides */
 @media (max-width: 600px) {
+    .history-filters {
+        margin-bottom: var(--spacing-sm);
+    }
     .history-card {
         padding: var(--spacing-sm) 28px var(--spacing-sm) 0;
         gap: var(--spacing-sm);
