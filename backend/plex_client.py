@@ -646,6 +646,10 @@ class PlexClient:
     def get_thumb_path(self, rating_key: str) -> str | None:
         """Get the raw Plex thumb path for a track.
 
+        Walks the Plex hierarchy: track thumb → album thumb → artist thumb.
+        Compilation/soundtrack albums often lack track and album art, so
+        falling back to the artist thumb avoids blank covers.
+
         Args:
             rating_key: Plex rating key
 
@@ -657,7 +661,11 @@ class PlexClient:
 
         try:
             item = self._server.fetchItem(int(rating_key))
-            return item.thumb if hasattr(item, "thumb") else None
+            return (
+                getattr(item, "thumb", None)
+                or getattr(item, "parentThumb", None)
+                or getattr(item, "grandparentThumb", None)
+            )
         except Exception:
             return None
 
