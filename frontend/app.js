@@ -70,10 +70,16 @@ const state = {
     // Current view and mode
     view: 'home', // 'home' | 'create' | 'recommend' | 'settings'
     mode: 'prompt', // 'prompt' | 'seed'
-    step: 'input',  // 'input' | 'dimensions' | 'filters' | 'results'
+    step: 'input',  // 'input' | 'refine' | 'dimensions' | 'filters' | 'results'
 
     // Prompt flow
     prompt: '',
+
+    // Refine questions (prompt mode)
+    questions: [],          // ClarifyingQuestion[] from /recommend/questions
+    questionAnswers: [],    // (string|null)[] — selected option per question
+    questionTexts: [],      // string[] — free-text additions per question
+    filterAnalysisPromise: null,  // cached promise from parallel filter analysis
 
     // Seed track flow
     seedTrack: null,
@@ -132,7 +138,7 @@ const state = {
     // Recommendation (006)
     rec: {
         mode: 'library',       // 'library' | 'discovery'
-        step: 'prompt',        // 'prompt' | 'setup' | 'questions' | 'results'
+        step: 'prompt',        // 'prompt' | 'refine' | 'setup' | 'results'
         prompt: '',
         selectedGenres: [],
         selectedDecades: [],
@@ -146,6 +152,7 @@ const state = {
         estimatedCost: 0,
         researchWarning: null,
         loading: false,
+        filterAnalysisPromise: null,
     },
 };
 
@@ -494,6 +501,7 @@ const HASH_TO_VIEW = {
     'playlist-seed': 'create',
     'recommend-album': 'recommend',
     'settings': 'settings',
+    'result': 'result',
     // Backward compat
     'make-playlist': 'create',
 };
@@ -533,6 +541,11 @@ function navigateTo(view, mode) {
     if (mode) state.mode = mode;
     state.view = view;
     updateView();
+    // Reset wide layout when leaving a results view
+    if (viewChanged) {
+        const appEl = document.querySelector('.app');
+        if (appEl) appEl.classList.remove('app--wide');
+    }
     if (modeChanged) {
         state.step = 'input';
         updateMode();
@@ -542,7 +555,384 @@ function navigateTo(view, mode) {
         loadSettings();
     } else if (view === 'recommend') {
         initRecommendView();
+    } else if (view === 'home') {
+        renderHistoryFeed();
     }
+}
+
+async function loadSavedResult(resultId) {
+    try {
+        const data = await apiCall(`/results/${encodeURIComponent(resultId)}`);
+
+        if (data.type === 'album_recommendation') {
+            // Populate recommend state from snapshot
+            state.view = 'recommend';
+            state.rec.recommendations = data.snapshot.recommendations || [];
+            state.rec.tokenCount = data.snapshot.token_count || 0;
+            state.rec.estimatedCost = data.snapshot.estimated_cost || 0;
+            state.rec.researchWarning = data.snapshot.research_warning || null;
+            state.rec.prompt = data.prompt;
+            state.rec.step = 'results';
+            state.rec.loading = false;
+
+            updateView();
+            updateRecStep();
+            renderRecResults();
+        } else {
+            // prompt_playlist or seed_playlist — populate playlist state
+            state.view = 'create';
+            state.mode = data.type === 'seed_playlist' ? 'seed' : 'prompt';
+            state.step = 'results';
+
+            const snapshot = data.snapshot;
+            state.playlist = snapshot.tracks || [];
+            state.playlistTitle = snapshot.playlist_title || data.title;
+            state.narrative = snapshot.narrative || '';
+            state.trackReasons = snapshot.track_reasons || {};
+            state.playlistName = snapshot.playlist_title || data.title;
+            state.tokenCount = snapshot.token_count || 0;
+            state.estimatedCost = snapshot.estimated_cost || 0;
+            state.selectedTrackKey = null;
+
+            updateView();
+            updateMode();
+            updateStep();
+            updatePlaylist();
+        }
+
+        window.scrollTo(0, 0);
+    } catch (e) {
+        // Result not found or deleted — show home with message
+        console.warn('Failed to load saved result:', e);
+        state.view = 'home';
+        history.replaceState(null, '', '#home');
+        updateView();
+        showError('This result is no longer available.');
+    }
+}
+
+// =============================================================================
+// History Feed
+// =============================================================================
+
+/** In-memory cache of history items + pagination metadata */
+let _historyCache = { items: [], total: 0, loaded: false, stale: true };
+let _historyFilter = 'all'; // 'all' | 'playlists' | 'albums'
+let _historyPendingDelete = null;
+let _historyUndoTimeout = null;
+
+/** Mark history as needing re-fetch (called after a result is saved) */
+function markHistoryStale() {
+    _historyCache.stale = true;
+}
+
+/** Relative timestamp for history cards */
+function relativeTime(isoString) {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMin = Math.floor(diffMs / 60000);
+    const diffHr = Math.floor(diffMs / 3600000);
+    const diffDay = Math.floor(diffMs / 86400000);
+
+    if (diffMin < 1) return 'Just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffHr < 24) return `${diffHr}h ago`;
+    if (diffDay === 1) return 'Yesterday';
+    if (diffDay < 7) {
+        return date.toLocaleDateString(undefined, { weekday: 'long' });
+    }
+    // Same year → "Feb 12"; different year → "Feb 2025"
+    if (date.getFullYear() === now.getFullYear()) {
+        return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+    return date.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+}
+
+/** Date group label for a given ISO timestamp */
+function dateGroupLabel(isoString) {
+    const date = new Date(isoString);
+    const now = new Date();
+
+    // Today
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (date >= todayStart) return 'Today';
+
+    // Yesterday
+    const yesterdayStart = new Date(todayStart);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    if (date >= yesterdayStart) return 'Yesterday';
+
+    // Earlier this week (same ISO week)
+    const dayOfWeek = now.getDay() || 7; // Monday = 1
+    const weekStart = new Date(todayStart);
+    weekStart.setDate(weekStart.getDate() - dayOfWeek + 1);
+    if (date >= weekStart) return 'Earlier this week';
+
+    // Same year → "Month Day"; different year → "Month Year"
+    if (date.getFullYear() === now.getFullYear()) {
+        return date.toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
+    }
+    return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
+/** Icon for result type */
+function historyIcon(type) {
+    if (type === 'album_recommendation') return '\u{1F4BF}'; // 💿
+    if (type === 'seed_playlist') return '\u{1F331}'; // 🌱
+    return '\u{1F9E0}'; // 🧠
+}
+
+/** Icon title for result type */
+function historyIconTitle(type) {
+    if (type === 'album_recommendation') return 'Album recommendation';
+    if (type === 'seed_playlist') return 'Playlist from seed';
+    return 'Playlist from prompt';
+}
+
+/** Scrub date suffix from playlist titles (e.g., "Title - Feb 2026") */
+function scrubDateSuffix(title) {
+    return title.replace(/ - [A-Z][a-z]+ \d{4}$/, '');
+}
+
+/** Check if item passes the current filter */
+function passesHistoryFilter(item) {
+    if (_historyFilter === 'all') return true;
+    if (_historyFilter === 'playlists') return item.type !== 'album_recommendation';
+    if (_historyFilter === 'albums') return item.type === 'album_recommendation';
+    return true;
+}
+
+/** Render the history feed from cached data */
+function renderHistoryFeedFromCache() {
+    const container = document.getElementById('history-feed');
+    if (!container) return;
+
+    const items = _historyCache.items;
+
+    // Empty state
+    if (items.length === 0) {
+        container.innerHTML = '<div class="history-empty">Your playlist and album history will appear here</div>';
+        return;
+    }
+
+    // Count by type for filter chips
+    const playlistCount = items.filter(i => i.type !== 'album_recommendation').length;
+    const albumCount = items.filter(i => i.type === 'album_recommendation').length;
+
+    // Build HTML
+    let html = '';
+
+    // Filter chips
+    html += '<div class="history-filters" role="group" aria-label="Filter history by type">';
+    html += `<button class="filter-chip${_historyFilter === 'all' ? ' selected' : ''}" data-hfilter="all">All <span class="filter-chip-count">${items.length}</span></button>`;
+    html += `<button class="filter-chip${_historyFilter === 'playlists' ? ' selected' : ''}" data-hfilter="playlists">Playlists <span class="filter-chip-count">${playlistCount}</span></button>`;
+    html += `<button class="filter-chip${_historyFilter === 'albums' ? ' selected' : ''}" data-hfilter="albums">Albums <span class="filter-chip-count">${albumCount}</span></button>`;
+    html += '</div>';
+
+    // Group by date
+    let lastGroup = null;
+    let idx = 0;
+    for (const item of items) {
+        const visible = passesHistoryFilter(item);
+        const display = visible ? '' : ' style="display:none"';
+        const group = dateGroupLabel(item.created_at);
+
+        if (group !== lastGroup) {
+            // Check if this group has any visible items
+            const groupHasVisible = items.some(
+                i => dateGroupLabel(i.created_at) === group && passesHistoryFilter(i)
+            );
+            const headerDisplay = groupHasVisible ? '' : ' style="display:none"';
+            html += `<div class="date-group-header"${headerDisplay} style="animation-delay:${idx * 30}ms">${escapeHtml(group)}</div>`;
+            lastGroup = group;
+        }
+
+        const title = item.type === 'album_recommendation'
+            ? escapeHtml(item.title)
+            : escapeHtml(scrubDateSuffix(item.title));
+
+        const artistSpan = item.artist && item.type !== 'album_recommendation'
+            ? ` <span class="history-card-artist">${escapeHtml(item.artist)}</span>`
+            : '';
+
+        const subtitle = item.subtitle
+            ? escapeHtml(item.subtitle)
+            : (item.prompt ? escapeHtml(item.prompt) : '');
+
+        html += `<div class="history-card" data-result-id="${escapeHtml(item.id)}" data-type="${escapeHtml(item.type)}"${display} style="animation-delay:${idx * 30}ms">`;
+        html += `  <div class="history-card-icon" title="${historyIconTitle(item.type)}">${historyIcon(item.type)}</div>`;
+        html += `  <div class="history-card-body">`;
+        html += `    <div class="history-card-title">${title}${artistSpan}</div>`;
+        html += `    <div class="history-card-subtitle">${subtitle}</div>`;
+        html += `  </div>`;
+        html += `  <span class="history-card-time">${relativeTime(item.created_at)}</span>`;
+        html += `  <button class="history-card-delete" aria-label="Delete" title="Delete">&times;</button>`;
+        html += '</div>';
+        idx++;
+    }
+
+    // Load more button
+    if (_historyCache.items.length < _historyCache.total) {
+        html += '<div class="history-load-more"><button class="load-more-btn">Load more</button></div>';
+    }
+
+    container.innerHTML = html;
+}
+
+/** Fetch and render the history feed */
+async function renderHistoryFeed() {
+    const container = document.getElementById('history-feed');
+    if (!container) return;
+
+    // Use cache if fresh
+    if (_historyCache.loaded && !_historyCache.stale) {
+        renderHistoryFeedFromCache();
+        return;
+    }
+
+    try {
+        const data = await apiCall('/results?limit=20');
+        _historyCache.items = data.results || [];
+        _historyCache.total = data.total || 0;
+        _historyCache.loaded = true;
+        _historyCache.stale = false;
+        _historyFilter = 'all';
+
+        renderHistoryFeedFromCache();
+    } catch (e) {
+        console.warn('Failed to load history:', e);
+        container.innerHTML = '<div class="history-empty">Could not load history</div>';
+    }
+}
+
+/** Load more history items */
+async function loadMoreHistory() {
+    try {
+        const offset = _historyCache.items.length;
+        const data = await apiCall(`/results?limit=20&offset=${offset}`);
+        const newItems = data.results || [];
+        _historyCache.items.push(...newItems);
+        _historyCache.total = data.total || _historyCache.total;
+        renderHistoryFeedFromCache();
+    } catch (e) {
+        console.warn('Failed to load more history:', e);
+    }
+}
+
+/** Handle filter chip clicks */
+function handleHistoryFilterClick(filter) {
+    _historyFilter = filter;
+    renderHistoryFeedFromCache();
+}
+
+/** Handle delete with undo */
+function handleHistoryDelete(resultId, cardEl) {
+    const undoToast = document.getElementById('undo-toast');
+    const undoBtn = document.getElementById('undo-toast-btn');
+
+    // Finalize any previous pending delete
+    if (_historyPendingDelete) {
+        finalizeHistoryDelete(_historyPendingDelete.id);
+    }
+
+    // Hide the card
+    cardEl.style.display = 'none';
+    _historyPendingDelete = { id: resultId, el: cardEl };
+
+    // Update date group header visibility
+    updateDateGroupVisibility();
+
+    // Show undo toast
+    undoToast.classList.add('visible');
+
+    clearTimeout(_historyUndoTimeout);
+    _historyUndoTimeout = setTimeout(() => {
+        if (_historyPendingDelete && _historyPendingDelete.id === resultId) {
+            finalizeHistoryDelete(resultId);
+        }
+        undoToast.classList.remove('visible');
+    }, 5000);
+
+    // Set up undo handler (replace previous)
+    const newUndoBtn = undoBtn.cloneNode(true);
+    undoBtn.parentNode.replaceChild(newUndoBtn, undoBtn);
+    newUndoBtn.addEventListener('click', () => {
+        if (_historyPendingDelete && _historyPendingDelete.id === resultId) {
+            _historyPendingDelete.el.style.display = 'flex';
+            _historyPendingDelete = null;
+            updateDateGroupVisibility();
+        }
+        clearTimeout(_historyUndoTimeout);
+        undoToast.classList.remove('visible');
+    });
+}
+
+/** Actually delete the result via API and remove from cache */
+function finalizeHistoryDelete(resultId) {
+    fetch(`/api/results/${encodeURIComponent(resultId)}`, { method: 'DELETE' }).catch(() => {});
+    _historyCache.items = _historyCache.items.filter(i => i.id !== resultId);
+    _historyCache.total = Math.max(0, _historyCache.total - 1);
+    _historyPendingDelete = null;
+
+    // Re-render to clean up DOM
+    renderHistoryFeedFromCache();
+}
+
+/** Show/hide date group headers based on whether they have visible cards */
+function updateDateGroupVisibility() {
+    const container = document.getElementById('history-feed');
+    if (!container) return;
+    const headers = container.querySelectorAll('.date-group-header');
+    headers.forEach(header => {
+        let next = header.nextElementSibling;
+        let hasVisible = false;
+        while (next && !next.classList.contains('date-group-header') && !next.classList.contains('history-load-more')) {
+            if (next.classList.contains('history-card') && next.style.display !== 'none') {
+                hasVisible = true;
+                break;
+            }
+            next = next.nextElementSibling;
+        }
+        header.style.display = hasVisible ? '' : 'none';
+    });
+}
+
+/** Set up event delegation for history feed clicks */
+function setupHistoryEventListeners() {
+    const container = document.getElementById('history-feed');
+    if (!container) return;
+
+    container.addEventListener('click', (e) => {
+        // Filter chip
+        const chip = e.target.closest('.filter-chip');
+        if (chip) {
+            handleHistoryFilterClick(chip.dataset.hfilter);
+            return;
+        }
+
+        // Delete button
+        const deleteBtn = e.target.closest('.history-card-delete');
+        if (deleteBtn) {
+            e.stopPropagation();
+            const card = deleteBtn.closest('.history-card');
+            if (card) handleHistoryDelete(card.dataset.resultId, card);
+            return;
+        }
+
+        // Load more
+        const loadMore = e.target.closest('.load-more-btn');
+        if (loadMore) {
+            loadMoreHistory();
+            return;
+        }
+
+        // Card click → navigate to result
+        const card = e.target.closest('.history-card');
+        if (card && card.dataset.resultId) {
+            location.hash = `#result/${card.dataset.resultId}`;
+        }
+    });
 }
 
 function updateView() {
@@ -587,13 +977,19 @@ function updateMode() {
         inputSeed.classList.toggle('active', state.mode === 'seed');
     }
 
-    // Update step progress - hide dimensions step for prompt mode and renumber
-    const dimensionsStep = document.querySelector('.step[data-step="dimensions"]');
+    // Update step progress - show refine for prompt mode, dimensions for seed mode
+    const refineStep = document.querySelector('#playlist-steps .step[data-step="refine"]');
+    const refineConnector = refineStep?.previousElementSibling;
+    const dimensionsStep = document.querySelector('#playlist-steps .step[data-step="dimensions"]');
     const dimensionsConnector = dimensionsStep?.previousElementSibling;
     if (state.mode === 'prompt') {
+        refineStep?.classList.remove('hidden');
+        refineConnector?.classList.remove('hidden');
         dimensionsStep?.classList.add('hidden');
         dimensionsConnector?.classList.add('hidden');
     } else {
+        refineStep?.classList.add('hidden');
+        refineConnector?.classList.add('hidden');
         dimensionsStep?.classList.remove('hidden');
         dimensionsConnector?.classList.remove('hidden');
     }
@@ -628,8 +1024,10 @@ function updateStep() {
     const appFooter = document.querySelector('.app-footer');
     if (appFooter) appFooter.classList.toggle('app-footer--results', isResults);
 
-    // Update step progress indicators
-    const steps = ['input', 'dimensions', 'filters', 'results'];
+    // Steps array is mode-dependent: prompt uses refine, seed uses dimensions
+    const steps = state.mode === 'prompt'
+        ? ['input', 'refine', 'filters', 'results']
+        : ['input', 'dimensions', 'filters', 'results'];
     const currentIndex = steps.indexOf(state.step);
 
     document.querySelectorAll('#playlist-steps .step').forEach((stepEl, index) => {
@@ -638,7 +1036,7 @@ function updateStep() {
         const isActive = stepName === state.step;
 
         stepEl.classList.toggle('active', isActive);
-        stepEl.classList.toggle('completed', stepIndex < currentIndex);
+        stepEl.classList.toggle('completed', stepIndex >= 0 && stepIndex < currentIndex);
 
         // Update ARIA state for screen readers
         if (isActive) {
@@ -648,9 +1046,13 @@ function updateStep() {
         }
     });
 
-    // Update connectors
-    document.querySelectorAll('#playlist-steps .step-connector').forEach((connector, i) => {
-        connector.classList.toggle('completed', i < currentIndex);
+    // Update connectors — only count visible ones
+    let connectorIdx = 0;
+    document.querySelectorAll('#playlist-steps .step-connector').forEach(connector => {
+        if (!connector.classList.contains('hidden')) {
+            connector.classList.toggle('completed', connectorIdx < currentIndex);
+            connectorIdx++;
+        }
     });
 
     // Update step panels
@@ -664,6 +1066,8 @@ function updateStep() {
         } else {
             document.getElementById('step-input-seed').classList.add('active');
         }
+    } else if (state.step === 'refine') {
+        document.getElementById('step-refine').classList.add('active');
     } else if (state.step === 'dimensions') {
         document.getElementById('step-dimensions').classList.add('active');
     } else if (state.step === 'filters') {
@@ -1674,6 +2078,10 @@ function dismissSuccessModal() {
 function resetPlaylistState() {
     state.step = 'input';
     state.prompt = '';
+    state.questions = [];
+    state.questionAnswers = [];
+    state.questionTexts = [];
+    state.filterAnalysisPromise = null;
     state.seedTrack = null;
     state.dimensions = [];
     state.selectedDimensions = [];
@@ -1935,6 +2343,15 @@ function setupEventListeners() {
                 }
                 return;
             }
+            // Special case: clicking a playlist flow while already in that flow
+            if (state.view === 'create') {
+                const isCurrentMode = (hash === 'playlist-prompt' && state.mode === 'prompt') ||
+                                      (hash === 'playlist-seed' && state.mode === 'seed');
+                if (isCurrentMode && (state.step !== 'input' || state.loading)) {
+                    openPlaylistRestartModal();
+                    return;
+                }
+            }
             location.hash = '#' + hash;
             // Close dropdown if open
             const dropdown = document.querySelector('.nav-dropdown');
@@ -1985,13 +2402,47 @@ function setupEventListeners() {
 
     // Hash-based routing for top-level views
     window.addEventListener('hashchange', () => {
+        const hash = location.hash.slice(1);
+        if (hash.startsWith('result/')) {
+            const resultId = hash.split('/')[1];
+            if (resultId) {
+                loadSavedResult(resultId);
+                return;
+            }
+        }
         const view = viewFromHash();
         const mode = modeFromHash();
         navigateTo(view, mode);
     });
 
+    // Playlist prompt pills
+    const playlistPillContainer = document.getElementById('playlist-prompt-pills');
+    if (playlistPillContainer) {
+        playlistPillContainer.addEventListener('click', e => {
+            const pill = e.target.closest('.prompt-pill');
+            if (!pill) return;
+            document.getElementById('prompt-input').value = pill.textContent.trim();
+        });
+    }
+    const playlistShuffleBtn = document.getElementById('playlist-prompt-shuffle');
+    if (playlistShuffleBtn) {
+        playlistShuffleBtn.addEventListener('click', () => shufflePromptPills('playlist-prompt-pills', PLAYLIST_PROMPT_GROUPS));
+    }
+
     // Prompt analysis
     document.getElementById('analyze-prompt-btn').addEventListener('click', handleAnalyzePrompt);
+
+    // Refine step (prompt mode)
+    document.getElementById('refine-next-btn')?.addEventListener('click', handlePlaylistRefineNext);
+    const playlistQuestionsContainer = document.getElementById('playlist-questions-container');
+    if (playlistQuestionsContainer) {
+        const playlistQState = {
+            get questions() { return state.questions; },
+            get answers() { return state.questionAnswers; },
+            get answerTexts() { return state.questionTexts; },
+        };
+        setupQuestionEventHandlers(playlistQuestionsContainer, playlistQState, renderPlaylistQuestions);
+    }
 
     // Track search
     document.getElementById('search-tracks-btn').addEventListener('click', handleSearchTracks);
@@ -2165,6 +2616,9 @@ function setupEventListeners() {
     // Play Now button
     document.getElementById('play-now-btn').addEventListener('click', handlePlayNow);
 
+    // Playlist Start Over link
+    document.getElementById('playlist-start-over')?.addEventListener('click', resetPlaylistState);
+
     // Refresh clients in client picker modal
     document.getElementById('refresh-clients-btn').addEventListener('click', refreshClientList);
 
@@ -2219,6 +2673,7 @@ function setupEventListeners() {
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         const modals = [
+            { id: 'playlist-restart-modal', dismiss: dismissPlaylistRestartModal },
             { id: 'rec-restart-modal', dismiss: dismissRecRestartModal },
             { id: 'play-choice-modal', dismiss: dismissPlayChoice },
             { id: 'client-picker-modal', dismiss: dismissClientPicker },
@@ -2251,26 +2706,27 @@ async function handleAnalyzePrompt() {
 
     const stepLoader = showTimedStepLoading([
         { id: 'parsing', text: 'Parsing your request...', status: 'active' },
-        { id: 'genres', text: 'Identifying genres and eras...', status: 'pending' },
+        { id: 'questions', text: 'Crafting questions...', status: 'pending' },
         { id: 'matching', text: 'Matching to your library...', status: 'pending' },
     ]);
 
+    // Fire filter analysis in parallel (cached as a promise for the refine→filters transition)
+    state.filterAnalysisPromise = analyzePrompt(prompt).catch(() => null);
+
     try {
-        const response = await analyzePrompt(prompt);
+        // Fire question generation (reuse recommend endpoint)
+        const data = await apiCall('/recommend/questions', {
+            method: 'POST',
+            body: JSON.stringify({ prompt }),
+        });
 
-        // Track analysis costs
-        state.sessionTokens += response.token_count || 0;
-        state.sessionCost += response.estimated_cost || 0;
+        state.questions = data.questions;
+        state.questionAnswers = data.questions.map(() => null);
+        state.questionTexts = data.questions.map(() => '');
 
-        state.availableGenres = response.available_genres;
-        state.availableDecades = response.available_decades;
-        state.selectedGenres = response.suggested_genres;
-        state.selectedDecades = response.suggested_decades;
-
-        state.step = 'filters';
+        renderPlaylistQuestions();
+        state.step = 'refine';
         updateStep();
-        updateFilters();
-        updateFilterPreview();
     } catch (error) {
         showError(error.message);
     } finally {
@@ -2471,6 +2927,15 @@ async function handleGenerate() {
 
     if (state.mode === 'prompt') {
         request.prompt = state.prompt;
+        if (state.questionAnswers?.length) {
+            request.refinement_answers = state.questionAnswers.map((ans, i) => {
+                const text = state.questionTexts[i]?.trim();
+                if (ans && text) return `${ans} (${text})`;
+                if (ans) return ans;
+                if (text) return text;
+                return null;
+            });
+        }
     } else {
         request.seed_track = {
             rating_key: state.seedTrack.rating_key,
@@ -2525,6 +2990,12 @@ async function handleGenerate() {
             updatePlaylist();
             window.scrollTo(0, 0);
             hideStepLoading();
+
+            // Update URL to deep link for this result
+            if (response.result_id) {
+                history.replaceState(null, '', `#result/${response.result_id}`);
+                markHistoryStale();
+            }
         },
         // onError
         (error) => {
@@ -2769,6 +3240,20 @@ function openRecRestartModal() {
 
 function dismissRecRestartModal() {
     const modal = document.getElementById('rec-restart-modal');
+    modal.classList.add('hidden');
+    removeNoScrollIfNoModals();
+    focusManager.closeModal(modal);
+}
+
+function openPlaylistRestartModal() {
+    const modal = document.getElementById('playlist-restart-modal');
+    modal.classList.remove('hidden');
+    lockScroll();
+    focusManager.openModal(modal);
+}
+
+function dismissPlaylistRestartModal() {
+    const modal = document.getElementById('playlist-restart-modal');
     modal.classList.add('hidden');
     removeNoScrollIfNoModals();
     focusManager.closeModal(modal);
@@ -3106,106 +3591,243 @@ function handleUpdateSuccessNewPlaylist() {
 // Recommendation View (006)
 // =============================================================================
 
-const EXAMPLE_PROMPTS = [
-    "Something for a rainy Sunday morning",
-    "An album to cook dinner to",
-    "Music for a long drive at night",
-    "Something that sounds like autumn feels",
-    "An album to fall asleep to",
-    "Music for deep focus and concentration",
-    "Something to match this glass of whiskey",
-    "An album that feels like a warm hug",
-    "Music for when you need a good cry",
-    "Something adventurous I haven't heard before",
-    "An album for a lazy Saturday afternoon",
-    "Music that sounds like the ocean",
-    "Something to get pumped up for a workout",
-    "An album for a dinner party with friends",
-    "Music for stargazing",
-    "Something melancholy but beautiful",
-    "An album that tells a story from start to finish",
-    "Music for a morning coffee ritual",
-    "Something raw and emotional",
-    "An album that defined a decade",
-    "Music for a road trip through the desert",
-    "Something lush and cinematic",
-    "An album to decompress after a long day",
-    "Music that makes you feel nostalgic",
-    "Something experimental but accessible",
-    "An album for a rainy commute",
-    "Music that sounds like a film soundtrack",
-    "Something to play while reading",
-    "An album that feels like floating",
-    "Music for a bonfire on the beach",
-    "Something dark and atmospheric",
-    "An album that rewards repeat listens",
-    "Music for a quiet evening alone",
-    "Something that captures summer energy",
-    "An album that blends genres in surprising ways",
-    "Music for a Sunday morning with the paper",
-    "Something that sounds like space",
-    "An album to play at a backyard barbecue",
-    "Music that feels timeless",
-    "Something with incredible production",
-    "An album that changed music forever",
-    "Music for a winter evening by the fire",
-    "Something groovy and danceable",
-    "An album with stunning vocal performances",
-    "Music that captures city life at night",
-    "Something stripped down and honest",
-    "An album for a creative brainstorming session",
-    "Music that sounds like childhood memories",
-    "Something psychedelic and mind-expanding",
-    "An album to introduce someone to jazz",
-    "Music for yoga or meditation",
-    "Something angry but cathartic",
-    "An album with a perfect Side A",
-    "Music for a first date dinner",
-    "Something that makes you want to dance alone in your room",
-    "An album that captures the feeling of heartbreak",
-    "Music for a Sunday drive through the countryside",
-    "Something ethereal and otherworldly",
-    "An album every music fan should hear",
-    "Music that feels like a warm bath",
-    "Something politically charged but artful",
-    "An album that sounds better on vinyl",
-    "Music for a late night coding session",
-    "Something bluesy and soulful",
-    "An album that was ahead of its time",
-    "Music for when the seasons change",
-    "Something minimalist and meditative",
-    "An album that captures youthful rebellion",
-    "Music for a candlelit dinner",
-    "Something funky and infectious",
-    "An album that works as background or foreground",
-    "Music for a foggy morning walk",
-    "Something with incredible guitar work",
-    "An album to rediscover an artist",
-    "Music that captures working-class life",
-    "Something dreamy and shoegaze-y",
-    "An album for after midnight",
-    "Music that tells the story of a place",
-    "Something with complex rhythms and time signatures",
-    "An album that captures a specific moment in history",
-    "Music for washing the dishes",
-    "Something that builds to a climax",
-    "An album with seamless transitions between tracks",
-    "Music for the golden hour",
-    "Something punk but melodic",
-    "An album that feels like a journey",
-    "Music for a thunderstorm",
-    "Something with beautiful string arrangements",
-    "An album you can lose yourself in",
-    "Music for a picnic in the park",
-    "Something that defies easy categorization",
-    "An album to play when you miss someone",
-    "Music that sounds like sunrise",
-    "Something with haunting vocal harmonies",
-    "An album for your most discerning music friend",
-    "Music for when words aren't enough",
-    "Something that makes silence feel different after",
-    "An album to celebrate something",
-    "Music for the end of the world",
+const PLAYLIST_PROMPT_GROUPS = [
+    /* Mood / Energy */
+    [
+        "Happy but not annoying about it",
+        "Sad in a way that feels good",
+        "Angry, the productive kind",
+        "Euphoric, peak of a good night",
+        "Dreamy and slightly out of focus",
+        "Quiet devastation, keep moving",
+        "Wistful, not wallowing",
+        "Warm like the end of something good",
+        "Tense, something's about to happen",
+        "Bittersweet and okay with it",
+        "Dark but not hopeless",
+        "Hopeful, first day of something",
+        "Numb, just need the room filled",
+        "Giddy, almost embarrassingly so",
+        "Restless, needs to match the mood",
+        "Nostalgic for something nameless",
+        "Melancholy with good bones",
+        "Calm but not sleepy",
+        "Raw and unpolished",
+        "The comedown after something great",
+    ],
+    /* Activity / Context */
+    [
+        "Cooking slowly, no one's waiting",
+        "Late night drive, no destination",
+        "Last hour before a deadline",
+        "Long run, needs to pull you forward",
+        "Pre-game, getting the nerve up",
+        "Dinner party winding down well",
+        "Highway, windows cracked",
+        "Deep work, two hours, no surfacing",
+        "Getting ready, building confidence",
+        "Decompressing after a hard week",
+        "Solo night in, no explanation",
+        "Long flight, trying not to think",
+        "Cleaning like you mean it",
+        "Slow afternoon in the garden",
+        "Walk home after something big",
+        "After the party, just the dishes",
+        "Slow dance, no one watching",
+        "First coffee, easing in gently",
+        "Walking a city you don't know",
+        "BBQ that peaked an hour ago",
+    ],
+    /* Era / Decade */
+    [
+        "1970s soul, windows down",
+        "Classic rock with actual grit",
+        "1983, in the best possible way",
+        "Early 90s indie, four-track raw",
+        "Late 90s, before it all sped up",
+        "1967, before psychedelia curdled",
+        "2004 indie rock, blog-era peak",
+        "Motown, hits and deep cuts both",
+        "80s R&B, lush and unhurried",
+        "90s hip hop, NY and LA both",
+        "1972, recorded in someone's house",
+        "Early 2010s, last of guitar bands",
+        "British Invasion, no novelty acts",
+        "1957 jazz, smoke and late hours",
+        "2003 pop-punk, embarrassingly good",
+        "Outlaw country, pre-mainstream",
+        "80s post-punk, angular and cold",
+        "90s rave, before it was a brand",
+        "Krautrock, motorik and meditative",
+        "Late 80s hip hop, the invention",
+    ],
+    /* Genre / Style */
+    [
+        "Jazz, late and smoky, no hurry",
+        "Ambient, no pulse, just texture",
+        "Punk, fast and under two minutes",
+        "Soul with real weight behind it",
+        "Metal that means what it says",
+        "Acoustic folk, campfire honest",
+        "Reggae, slow afternoon, no agenda",
+        "Electronic, precise and cold",
+        "Blues that invented everything else",
+        "Country that earns the emotion",
+        "Afrobeat, propulsive and communal",
+        "Gospel with real conviction",
+        "Indie pop, bright and aching",
+        "Hardcore with something to say",
+        "Bossa nova, unhurried and warm",
+        "Lo-fi hip hop, dusty and patient",
+        "Post-rock that earns its ending",
+        "Disco, uncut and unapologetic",
+        "Americana with dirt on it",
+        "Shoegaze, loud and interior",
+    ],
+    /* Tempo / Danceability */
+    [
+        "Slow, nothing is rushing anywhere",
+        "Midtempo groove, head nodding only",
+        "Full energy, don't let up",
+        "Dance floor, 120 BPM minimum",
+        "Half-tempo, barely moving",
+        "Builds slow, earns the drop",
+        "Upbeat without being relentless",
+        "Shuffling, laidback swing feel",
+        "Relentless, no room to breathe",
+        "Hypnotic, same thing, slight shifts",
+        "Short and punchy, keep moving",
+        "Slow burn that actually pays off",
+        "Danceable, room for conversation",
+        "Fast and slightly out of control",
+        "Gentle pulse, background presence",
+        "Syncopated and playful",
+        "Doom tempo, slow and heavy",
+        "Bouncy and major key, unashamed",
+        "Sparse, lots of space in it",
+        "Peaks and valleys, earns the quiet",
+    ],
+];
+
+const REC_PROMPT_GROUPS = [
+    /* Mood / Vibe */
+    [
+        "Melancholy I want to sit inside",
+        "Warm and analog, like vinyl sounds",
+        "Bleak and beautiful at once",
+        "Joyful with no irony in it",
+        "Unsettling in a way I can't name",
+        "Tender without being soft",
+        "Cold and a little industrial",
+        "Romantic but not embarrassing",
+        "Restless and searching",
+        "Nostalgic for a time before me",
+        "Built for a real release",
+        "Dense and patient, rewards time",
+        "Strange and slightly off-kilter",
+        "Cinematic, feels like a place",
+        "Austere, almost nothing there",
+        "Deeply sad, don't soften it",
+        "Euphoric and earned, not cheap",
+    ],
+    /* Sounds-Like */
+    [
+        "Radiohead, but room to breathe",
+        "Nick Cave with some hope left",
+        "Early Springsteen, less polish",
+        "Joni Mitchell making a jazz record",
+        "Prince stripped to the bones",
+        "Arcade Fire, quieter ambition",
+        "Kendrick but more internal",
+        "Tom Waits went fully ambient",
+        "D'Angelo but tighter",
+        "Velvet Underground energy",
+        "PJ Harvey, more acoustic",
+        "Late Miles Davis, electric",
+        "Talking Heads but darker",
+        "Coltrane went electric",
+        "Portishead but less cold",
+        "Neil Young without the dust",
+        "Massive Attack but warmer",
+    ],
+    /* Genre Exploration */
+    [
+        "First jazz album, where to start",
+        "Introduce me to krautrock",
+        "Best entry point for ambient",
+        "Soul that invented the form",
+        "Metal without prior loyalty needed",
+        "Country with actual grit in it",
+        "Electronic that feels something",
+        "Folk that doesn't lose me",
+        "Hip hop with real patience in it",
+        "Reggae beyond the obvious three",
+        "Post-punk, angular, still alive",
+        "Classical with a clear narrative",
+        "Afrobeat with real propulsion",
+        "Gospel with conviction, not comfort",
+        "Experimental but I can stay",
+        "Brazilian music beyond bossa",
+        "Blues that explains what came after",
+    ],
+    /* Era / Era-Adjacent */
+    [
+        "Timeless, no decade owns it",
+        "Pure 1970s warmth, room sound",
+        "Sounds like 1983, best way",
+        "Late 60s psychedelia, still intact",
+        "Early 90s indie, lo-fi earnest",
+        "1970s jazz fusion at its peak",
+        "Mid-90s hip hop, NY and hungry",
+        "80s synth that aged well",
+        "Late 90s slowcore, unsparing",
+        "2001\u20132005 indie rock landmark",
+        "1960s soul, Detroit or Memphis",
+        "70s singer-songwriter, confessional",
+        "80s post-punk, cold and correct",
+        "90s electronic, pre-mainstream",
+        "Early 2000s R&B, sophisticated",
+        "Recorded in the 70s, sounds eternal",
+        "1960s modal jazz, serious",
+    ],
+    /* Emotional Occasion */
+    [
+        "Breakup, raw and recent",
+        "Something ended well",
+        "First listen back after time away",
+        "Celebrating quietly, just yourself",
+        "Heavy with no explanation",
+        "The week before everything changes",
+        "Feeling invisible, fine with it",
+        "Early stage of falling for someone",
+        "Grieving, need company in it",
+        "Long Sunday, nowhere to be",
+        "Proud and exhausted equally",
+        "3am, completely awake",
+        "The last day of something",
+        "Ready to start over, actually ready",
+        "Complicated happy",
+        "Homesick for somewhere unreachable",
+        "Tired of holding it together",
+    ],
+    /* Deep Cuts / Underrated */
+    [
+        "A masterpiece nobody talks about",
+        "Criminally overlooked",
+        "Best album, not their famous one",
+        "Too weird for radio, too good",
+        "One great record, then gone",
+        "Cult classic, devoted few",
+        "Critics loved it, world moved on",
+        "Ahead of its time",
+        "The album that got away",
+        "Debut that deserved a career",
+        "Side project better than the main",
+        "Reissued, finally getting its due",
+        "Sounds like nothing else here",
+        "Famous producer, album outshines",
+        "The one even fans missed",
+    ],
 ];
 
 let recSyncPollInterval = null;
@@ -3228,7 +3850,7 @@ async function initRecommendView() {
         }
         loadRecommendFilters();
     }
-    renderRecPromptPills();
+    renderPromptPills('rec-prompt-pills', 'rec-prompt-shuffle', REC_PROMPT_GROUPS);
     updateRecStep();
 }
 
@@ -3263,7 +3885,7 @@ function showRecSyncOverlay(status) {
                 if (state.config?.plex_connected) {
                     loadRecommendFilters();
                 }
-                renderRecPromptPills();
+                renderPromptPills('rec-prompt-pills', 'rec-prompt-shuffle', REC_PROMPT_GROUPS);
                 updateRecStep();
             }
         } catch {
@@ -3355,34 +3977,33 @@ function renderRecFilterChips() {
     }
 }
 
-function renderRecPromptPills() {
-    const container = document.getElementById('rec-prompt-pills');
-    if (!container) return;
-    const isMobile = window.matchMedia('(max-width: 767px)').matches;
-    const count = isMobile ? 3 : 4;
-    const shuffled = [...EXAMPLE_PROMPTS].sort(() => Math.random() - 0.5);
-    const selected = shuffled.slice(0, count);
-    container.innerHTML = selected.map(p =>
-        `<button class="rec-prompt-pill">${escapeHtml(p)}</button>`
-    ).join('');
-    // Hide shuffle button if pool is too small
-    const shuffleBtn = document.getElementById('rec-prompt-shuffle');
-    if (shuffleBtn) shuffleBtn.hidden = EXAMPLE_PROMPTS.length <= count;
+function pickOnePerGroup(groups) {
+    return groups.map(g => g[Math.floor(Math.random() * g.length)]);
 }
 
-function shuffleRecPills() {
-    const container = document.getElementById('rec-prompt-pills');
+function renderPromptPills(containerId, shuffleBtnId, groups) {
+    const container = document.getElementById(containerId);
     if (!container) return;
-    const isMobile = window.matchMedia('(max-width: 767px)').matches;
-    const count = isMobile ? 3 : 4;
+    const selected = pickOnePerGroup(groups);
+    container.innerHTML = selected.map(p =>
+        `<button class="prompt-pill">${escapeHtml(p)}</button>`
+    ).join('');
+    const btn = document.getElementById(shuffleBtnId);
+    if (btn) btn.hidden = groups.some(g => g.length <= 1);
+}
+
+function shufflePromptPills(containerId, groups) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
     const currentTexts = new Set(
-        [...container.querySelectorAll('.rec-prompt-pill')].map(p => p.textContent)
+        [...container.querySelectorAll('.prompt-pill')].map(p => p.textContent)
     );
-    let pool = EXAMPLE_PROMPTS.filter(p => !currentTexts.has(p));
-    if (pool.length < count) pool = [...EXAMPLE_PROMPTS];
-    const shuffled = [...pool].sort(() => Math.random() - 0.5);
-    const selected = shuffled.slice(0, count);
-    const pills = container.querySelectorAll('.rec-prompt-pill');
+    const selected = groups.map(group => {
+        const available = group.filter(p => !currentTexts.has(p));
+        const pool = available.length > 0 ? available : group;
+        return pool[Math.floor(Math.random() * pool.length)];
+    });
+    const pills = container.querySelectorAll('.prompt-pill');
     pills.forEach(p => { p.style.opacity = '0'; });
     setTimeout(() => {
         pills.forEach((p, i) => {
@@ -3393,7 +4014,7 @@ function shuffleRecPills() {
 }
 
 function updateRecStep() {
-    const steps = ['prompt', 'setup', 'questions', 'results'];
+    const steps = ['prompt', 'refine', 'setup', 'results'];
     const currentIndex = steps.indexOf(state.rec.step);
 
     // Update panels
@@ -3458,7 +4079,7 @@ async function updateRecAlbumPreview() {
     }
 }
 
-async function handlePromptAnalysis() {
+async function handlePromptSubmit() {
     const prompt = document.getElementById('rec-prompt-input')?.value || '';
     if (!prompt.trim()) {
         showError('Please enter a prompt');
@@ -3470,61 +4091,25 @@ async function handlePromptAnalysis() {
     if (btn) btn.disabled = true;
 
     const stepLoader = showTimedStepLoading([
-        { id: 'parsing', text: 'Parsing your request...', status: 'active' },
-        { id: 'genres', text: 'Identifying genres and eras...', status: 'pending' },
-        { id: 'filters', text: 'Setting up filters...', status: 'pending' },
-    ]);
-
-    const infoBanner = document.getElementById('rec-filter-info');
-
-    try {
-        const data = await apiCall('/recommend/analyze-prompt', {
-            method: 'POST',
-            body: JSON.stringify({
-                prompt: state.rec.prompt,
-                genres: state.availableGenres.map(g => g.name),
-                decades: state.availableDecades.map(d => d.name),
-            }),
-        });
-        state.rec.selectedGenres = data.genres || [];
-        state.rec.selectedDecades = data.decades || [];
-        if (infoBanner) infoBanner.classList.remove('hidden');
-    } catch (e) {
-        // Fallback: all included (empty = no filter)
-        state.rec.selectedGenres = state.availableGenres.map(g => g.name);
-        state.rec.selectedDecades = state.availableDecades.map(d => d.name);
-        if (infoBanner) infoBanner.classList.add('hidden');
-    } finally {
-        stepLoader.finish();
-        if (btn) btn.disabled = false;
-        renderRecFilterChips();
-        updateRecAlbumPreview();
-        setRecStep('setup');
-    }
-}
-
-async function handleRecQuestions() {
-    if (!state.rec.prompt.trim()) {
-        showError('Please enter a prompt');
-        return;
-    }
-
-    state.rec.loading = true;
-    const stepLoader = showTimedStepLoading([
         { id: 'analyzing', text: 'Analyzing your request...', status: 'active' },
         { id: 'questions', text: 'Crafting questions...', status: 'pending' },
     ]);
 
+    // Fire filter analysis in parallel (cached as a promise for the setup step)
+    state.rec.filterAnalysisPromise = apiCall('/recommend/analyze-prompt', {
+        method: 'POST',
+        body: JSON.stringify({
+            prompt: state.rec.prompt,
+            genres: state.availableGenres.map(g => g.name),
+            decades: state.availableDecades.map(d => d.name),
+        }),
+    }).catch(() => null);  // Swallow errors — fallback handled in handleRefineNext
+
     try {
+        // Fire question generation (only needs the prompt)
         const data = await apiCall('/recommend/questions', {
             method: 'POST',
-            body: JSON.stringify({
-                prompt: state.rec.prompt,
-                mode: state.rec.mode,
-                genres: (state.availableGenres.length > 0 && state.rec.selectedGenres.length === state.availableGenres.length) ? [] : state.rec.selectedGenres,
-                decades: (state.availableDecades.length > 0 && state.rec.selectedDecades.length === state.availableDecades.length) ? [] : state.rec.selectedDecades,
-                familiarity_pref: state.rec.familiarityPref,
-            }),
+            body: JSON.stringify({ prompt: state.rec.prompt }),
         });
 
         state.rec.questions = data.questions;
@@ -3533,35 +4118,130 @@ async function handleRecQuestions() {
         state.rec.answerTexts = data.questions.map(() => '');
 
         renderRecQuestions();
-        setRecStep('questions');
+        setRecStep('refine');
     } catch (e) {
         showError(e.message);
     } finally {
         stepLoader.finish();
-        state.rec.loading = false;
+        if (btn) btn.disabled = false;
     }
 }
 
-function renderRecQuestions() {
-    const container = document.getElementById('rec-questions-container');
+async function handleRefineNext() {
+    const infoBanner = document.getElementById('rec-filter-info');
+
+    // Await the cached filter analysis promise
+    const filterData = await state.rec.filterAnalysisPromise;
+    if (filterData) {
+        state.rec.selectedGenres = filterData.genres || [];
+        state.rec.selectedDecades = filterData.decades || [];
+        if (infoBanner) infoBanner.classList.remove('hidden');
+    } else {
+        // Fallback: all included (empty = no filter)
+        state.rec.selectedGenres = state.availableGenres.map(g => g.name);
+        state.rec.selectedDecades = state.availableDecades.map(d => d.name);
+        if (infoBanner) infoBanner.classList.add('hidden');
+    }
+
+    renderRecFilterChips();
+    updateRecAlbumPreview();
+    setRecStep('setup');
+}
+
+
+function renderQuestions(questions, answers, answerTexts, containerId) {
+    const container = document.getElementById(containerId);
     if (!container) return;
 
-    container.innerHTML = state.rec.questions.map((q, qi) => `
-        <div class="rec-question-card" data-question-index="${qi}">
-            <p class="rec-question-text">${escapeHtml(q.question_text)}</p>
-            <div class="rec-question-options">
+    container.innerHTML = questions.map((q, qi) => `
+        <div class="question-card" data-question-index="${qi}">
+            <p class="question-text">${escapeHtml(q.question_text)}</p>
+            <div class="question-options">
                 ${q.options.map((opt, oi) => `
-                    <button class="rec-option-pill ${state.rec.answers[qi] === opt ? 'selected' : ''}"
+                    <button class="option-pill ${answers[qi] === opt ? 'selected' : ''}"
                             data-question="${qi}" data-option="${oi}">
                         ${escapeHtml(opt)}
                     </button>
                 `).join('')}
             </div>
-            <input type="text" class="rec-question-freetext" placeholder="Add your own detail (optional)"
-                   data-question="${qi}" value="${escapeHtml(state.rec.answerTexts[qi] || '')}">
-            <button class="rec-question-skip" data-question="${qi}">Skip this question</button>
+            <input type="text" class="question-freetext" placeholder="Add your own detail (optional)"
+                   data-question="${qi}" value="${escapeHtml(answerTexts[qi] || '')}">
+            <button class="question-skip" data-question="${qi}">Skip this question</button>
         </div>
     `).join('');
+}
+
+function renderRecQuestions() {
+    renderQuestions(state.rec.questions, state.rec.answers, state.rec.answerTexts, 'rec-questions-container');
+}
+
+function renderPlaylistQuestions() {
+    renderQuestions(state.questions, state.questionAnswers, state.questionTexts, 'playlist-questions-container');
+}
+
+function setupQuestionEventHandlers(container, stateObj, renderFn) {
+    container.addEventListener('click', e => {
+        const pill = e.target.closest('.option-pill');
+        if (pill) {
+            const qi = parseInt(pill.dataset.question);
+            const oi = parseInt(pill.dataset.option);
+            const option = stateObj.questions[qi]?.options[oi];
+            if (stateObj.answers[qi] === option) {
+                stateObj.answers[qi] = null;
+            } else {
+                stateObj.answers[qi] = option;
+            }
+            renderFn();
+            return;
+        }
+        const skip = e.target.closest('.question-skip');
+        if (skip) {
+            const qi = parseInt(skip.dataset.question);
+            stateObj.answers[qi] = null;
+            stateObj.answerTexts[qi] = '';
+            renderFn();
+        }
+    });
+
+    container.addEventListener('input', e => {
+        if (e.target.classList.contains('question-freetext')) {
+            const qi = parseInt(e.target.dataset.question);
+            stateObj.answerTexts[qi] = e.target.value;
+        }
+    });
+}
+
+async function handlePlaylistRefineNext() {
+    // Await the cached filter analysis promise (fired in parallel during handleAnalyzePrompt)
+    const response = await state.filterAnalysisPromise;
+    if (response) {
+        // Track analysis costs
+        state.sessionTokens += response.token_count || 0;
+        state.sessionCost += response.estimated_cost || 0;
+
+        state.availableGenres = response.available_genres;
+        state.availableDecades = response.available_decades;
+        state.selectedGenres = response.suggested_genres;
+        state.selectedDecades = response.suggested_decades;
+    } else {
+        // Fallback: fetch stats directly if analysis failed
+        try {
+            const stats = await fetchLibraryStats();
+            state.availableGenres = stats.genres;
+            state.availableDecades = stats.decades;
+            state.selectedGenres = stats.genres.map(g => g.name);
+            state.selectedDecades = stats.decades.map(d => d.name);
+        } catch {
+            // Last resort: empty filters
+            state.selectedGenres = [];
+            state.selectedDecades = [];
+        }
+    }
+
+    state.step = 'filters';
+    updateStep();
+    updateFilters();
+    updateFilterPreview();
 }
 
 async function handleRecSwitchToDiscovery() {
@@ -3617,6 +4297,10 @@ async function handleRecGenerate() {
                 session_id: state.rec.sessionId,
                 answers: state.rec.answers,
                 answer_texts: state.rec.answerTexts,
+                mode: state.rec.mode,
+                genres: (state.availableGenres.length > 0 && state.rec.selectedGenres.length === state.availableGenres.length) ? [] : state.rec.selectedGenres,
+                decades: (state.availableDecades.length > 0 && state.rec.selectedDecades.length === state.availableDecades.length) ? [] : state.rec.selectedDecades,
+                familiarity_pref: state.rec.familiarityPref,
             }),
         });
 
@@ -3663,6 +4347,10 @@ async function handleRecGenerate() {
                             state.rec.tokenCount = data.token_count || 0;
                             state.rec.estimatedCost = data.estimated_cost || 0;
                             state.rec.researchWarning = data.research_warning;
+                            if (data.result_id) {
+                                state.rec.resultId = data.result_id;
+                                markHistoryStale();
+                            }
                         }
                     } catch (parseErr) {
                         if (parseErr.message && !parseErr.message.startsWith('Unexpected')) {
@@ -3679,6 +4367,11 @@ async function handleRecGenerate() {
         hideStepLoading();
         renderRecResults();
         setRecStep('results');
+
+        // Update URL to deep link for this result
+        if (state.rec.resultId) {
+            history.replaceState(null, '', `#result/${state.rec.resultId}`);
+        }
     } catch (e) {
         hideStepLoading();
         showError(e.message);
@@ -3872,8 +4565,8 @@ function renderRecResults() {
                             <button class="btn btn-primary rec-play-btn" data-rating-keys="${escapeHtml(primary.track_rating_keys.join(','))}">&#9654; Play Now</button>
                             <button class="btn btn-secondary rec-save-btn" data-album="${escapeHtml(primary.album)}" data-artist="${escapeHtml(primary.artist)}" data-rating-keys="${escapeHtml(primary.track_rating_keys.join(','))}" data-pitch="${escapeHtml(pitch.full_text || '')}">Save to Playlist</button>
                         ` : ''}
-                        <button class="rec-action-link" id="rec-show-another">Show me another</button>
-                        <button class="btn btn-secondary" id="rec-start-over">Start Over</button>
+                        <button class="rec-action-link" id="rec-show-another">Show Me Another</button>
+                        <button class="rec-action-link rec-action-link--subtle" id="rec-start-over">Start over</button>
                     </div>
                 </div>
             </div>
@@ -3942,6 +4635,7 @@ function resetRecState() {
     state.rec.tokenCount = 0;
     state.rec.estimatedCost = 0;
     state.rec.researchWarning = null;
+    state.rec.filterAnalysisPromise = null;
     // Preserve mode and familiarityPref; clear filter info banner
     const infoBanner = document.getElementById('rec-filter-info');
     if (infoBanner) infoBanner.classList.add('hidden');
@@ -3990,17 +4684,23 @@ function setupRecEventListeners() {
         });
     });
 
-    // Setup Next
+    // Setup Next → generate
     const setupNext = document.getElementById('rec-setup-next');
     if (setupNext) {
-        setupNext.addEventListener('click', () => handleRecQuestions());
+        setupNext.addEventListener('click', () => handleRecGenerate());
+    }
+
+    // Refine Next → apply filter suggestions and go to setup
+    const refineNext = document.getElementById('rec-refine-next');
+    if (refineNext) {
+        refineNext.addEventListener('click', () => handleRefineNext());
     }
 
     // Prompt pills
     const pillContainer = document.getElementById('rec-prompt-pills');
     if (pillContainer) {
         pillContainer.addEventListener('click', e => {
-            const pill = e.target.closest('.rec-prompt-pill');
+            const pill = e.target.closest('.prompt-pill');
             if (!pill) return;
             document.getElementById('rec-prompt-input').value = pill.textContent.trim();
             state.rec.prompt = pill.textContent.trim();
@@ -4010,58 +4710,21 @@ function setupRecEventListeners() {
     // Shuffle button
     const shuffleBtn = document.getElementById('rec-prompt-shuffle');
     if (shuffleBtn) {
-        shuffleBtn.addEventListener('click', shuffleRecPills);
+        shuffleBtn.addEventListener('click', () => shufflePromptPills('rec-prompt-pills', REC_PROMPT_GROUPS));
     }
 
     // Prompt Next
     const promptNext = document.getElementById('rec-prompt-next');
     if (promptNext) {
         promptNext.addEventListener('click', () => {
-            handlePromptAnalysis();
+            handlePromptSubmit();
         });
     }
 
-    // Questions - event delegation
-    const questionsContainer = document.getElementById('rec-questions-container');
-    if (questionsContainer) {
-        questionsContainer.addEventListener('click', e => {
-            // Option pill clicked
-            const pill = e.target.closest('.rec-option-pill');
-            if (pill) {
-                const qi = parseInt(pill.dataset.question);
-                const oi = parseInt(pill.dataset.option);
-                const option = state.rec.questions[qi]?.options[oi];
-                // Toggle selection
-                if (state.rec.answers[qi] === option) {
-                    state.rec.answers[qi] = null;
-                } else {
-                    state.rec.answers[qi] = option;
-                }
-                renderRecQuestions();
-                return;
-            }
-            // Skip clicked
-            const skip = e.target.closest('.rec-question-skip');
-            if (skip) {
-                const qi = parseInt(skip.dataset.question);
-                state.rec.answers[qi] = null;
-                state.rec.answerTexts[qi] = '';
-                renderRecQuestions();
-            }
-        });
-
-        questionsContainer.addEventListener('input', e => {
-            if (e.target.classList.contains('rec-question-freetext')) {
-                const qi = parseInt(e.target.dataset.question);
-                state.rec.answerTexts[qi] = e.target.value;
-            }
-        });
-    }
-
-    // Get Recommendation
-    const getRecBtn = document.getElementById('rec-get-recommendation');
-    if (getRecBtn) {
-        getRecBtn.addEventListener('click', handleRecGenerate);
+    // Questions - event delegation (recommend flow)
+    const recQuestionsContainer = document.getElementById('rec-questions-container');
+    if (recQuestionsContainer) {
+        setupQuestionEventHandlers(recQuestionsContainer, state.rec, renderRecQuestions);
     }
 
     // Recommend filter chips - event delegation
@@ -4166,6 +4829,15 @@ function setupRecEventListeners() {
     });
     document.getElementById('rec-restart-cancel')?.addEventListener('click', dismissRecRestartModal);
     document.getElementById('rec-restart-cancel-x')?.addEventListener('click', dismissRecRestartModal);
+
+    // Playlist restart confirmation modal buttons
+    document.getElementById('playlist-restart-confirm')?.addEventListener('click', () => {
+        dismissPlaylistRestartModal();
+        setLoading(false);
+        resetPlaylistState();
+    });
+    document.getElementById('playlist-restart-cancel')?.addEventListener('click', dismissPlaylistRestartModal);
+    document.getElementById('playlist-restart-cancel-x')?.addEventListener('click', dismissPlaylistRestartModal);
 }
 
 function handleRecResultAction(e) {
@@ -4241,6 +4913,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     setupEventListeners();
     setupRecEventListeners();
+    setupHistoryEventListeners();
     state.view = viewFromHash();
     state.mode = modeFromHash();
     if (!location.hash) {
@@ -4249,6 +4922,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateView();
     updateMode();
     updateStep();
+    renderPromptPills('playlist-prompt-pills', 'playlist-prompt-shuffle', PLAYLIST_PROMPT_GROUPS);
 
     // Load initial config
     try {
@@ -4263,9 +4937,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.error('Initialization error:', error);
     }
 
-    // Initialize recommend view AFTER config is loaded (needs plex_connected)
+    // Initialize views AFTER config is loaded
     if (state.view === 'recommend') {
         initRecommendView();
+    } else if (state.view === 'home') {
+        renderHistoryFeed();
+    }
+
+    // Handle direct navigation to a saved result (e.g., bookmarked URL)
+    const initHash = location.hash.slice(1);
+    if (initHash.startsWith('result/')) {
+        const resultId = initHash.split('/')[1];
+        if (resultId) {
+            loadSavedResult(resultId);
+        }
     }
 
     // Restore save mode from localStorage AFTER config loads (US3 — T017)

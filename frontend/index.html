@@ -43,12 +43,12 @@
                     <p class="home-subtitle">Create a playlist or discover an album from your Plex library.</p>
                     <div class="home-cards">
                         <button class="home-card" data-nav="playlist-prompt">
-                            <div class="home-card-icon" aria-hidden="true">&#9998;</div>
+                            <div class="home-card-icon" aria-hidden="true">&#129504;</div>
                             <div class="home-card-title">Playlist from Prompt</div>
                             <div class="home-card-desc">Describe a vibe and let AI curate tracks</div>
                         </button>
                         <button class="home-card" data-nav="playlist-seed">
-                            <div class="home-card-icon" aria-hidden="true">&#9835;</div>
+                            <div class="home-card-icon" aria-hidden="true">&#127793;</div>
                             <div class="home-card-title">Playlist from Seed</div>
                             <div class="home-card-desc">Start from a song you love</div>
                         </button>
@@ -60,9 +60,7 @@
                     </div>
                     <div class="home-history">
                         <h3 class="home-history-header">Recent activity</h3>
-                        <div class="home-history-placeholder">
-                            Your playlist and album history will appear here
-                        </div>
+                        <div id="history-feed" class="history-feed"></div>
                     </div>
                 </div>
             </div>
@@ -74,6 +72,11 @@
                     <div class="step active" data-step="input" aria-current="step">
                         <span class="step-circle">1</span>
                         <span class="step-label" id="step-label-input">Prompt</span>
+                    </div>
+                    <div class="step-connector" aria-hidden="true"></div>
+                    <div class="step" data-step="refine">
+                        <span class="step-circle">2</span>
+                        <span class="step-label">Refine</span>
                     </div>
                     <div class="step-connector" aria-hidden="true"></div>
                     <div class="step" data-step="dimensions">
@@ -105,12 +108,27 @@
                             rows="4"
                             aria-label="Playlist description"
                         ></textarea>
+                        <div class="example-prompts">
+                            <div class="example-prompts-header">
+                                <p class="example-prompts-label">Or try one of these</p>
+                                <button id="playlist-prompt-shuffle" class="prompt-shuffle" aria-label="Show different suggestions" title="Show different suggestions">&#x21bb;</button>
+                            </div>
+                            <div id="playlist-prompt-pills" class="prompt-pills"></div>
+                        </div>
                         <button id="analyze-prompt-btn" class="btn btn-primary">
                             Analyze
                         </button>
                         <p id="llm-required-hint-prompt" class="llm-required-hint" hidden>
                             <a href="#" data-view="settings">Configure an LLM provider</a> to continue
                         </p>
+                    </div>
+
+                    <!-- Refine Step (Prompt Mode Only) -->
+                    <div id="step-refine" class="step-panel">
+                        <h2>Just a couple questions</h2>
+                        <p class="step-description">Help us narrow it down. Skip any you're not sure about.</p>
+                        <div id="playlist-questions-container" class="questions-container"></div>
+                        <button id="refine-next-btn" class="btn btn-primary">Next</button>
                     </div>
 
                     <!-- Input Step (Seed Mode) -->
@@ -279,6 +297,7 @@
                                 <button id="play-now-btn" class="btn btn-secondary btn-play-now">
                                     &#9654; Play Now
                                 </button>
+                                <button id="playlist-start-over" class="rec-action-link rec-action-link--subtle">Start over</button>
                             </div>
                         </div>
 
@@ -380,14 +399,14 @@
                         <span class="step-label">Prompt</span>
                     </div>
                     <div class="step-connector"></div>
-                    <div class="step" data-step="setup">
+                    <div class="step" data-step="refine">
                         <span class="step-circle">2</span>
-                        <span class="step-label">Filters</span>
+                        <span class="step-label">Refine</span>
                     </div>
                     <div class="step-connector"></div>
-                    <div class="step" data-step="questions">
+                    <div class="step" data-step="setup">
                         <span class="step-circle">3</span>
-                        <span class="step-label">Questions</span>
+                        <span class="step-label">Filters</span>
                     </div>
                     <div class="step-connector"></div>
                     <div class="step" data-step="results">
@@ -403,14 +422,22 @@
                         <h2>What are you in the mood for?</h2>
                         <p class="step-description">Describe the vibe, moment, or feeling you want an album for.</p>
                         <textarea id="rec-prompt-input" class="prompt-textarea" placeholder="e.g., something for a rainy Sunday morning..." rows="4" aria-label="Album recommendation prompt"></textarea>
-                        <div class="rec-example-prompts">
-                            <div class="rec-example-header">
-                                <p class="rec-example-label">Or try one of these</p>
-                                <button id="rec-prompt-shuffle" class="rec-prompt-shuffle" aria-label="Show different suggestions" title="Show different suggestions">&#x21bb;</button>
+                        <div class="example-prompts">
+                            <div class="example-prompts-header">
+                                <p class="example-prompts-label">Or try one of these</p>
+                                <button id="rec-prompt-shuffle" class="prompt-shuffle" aria-label="Show different suggestions" title="Show different suggestions">&#x21bb;</button>
                             </div>
-                            <div id="rec-prompt-pills" class="rec-prompt-pills"></div>
+                            <div id="rec-prompt-pills" class="prompt-pills"></div>
                         </div>
                         <button id="rec-prompt-next" class="btn btn-primary">Next</button>
+                    </div>
+
+                    <!-- Refine Step (questions) -->
+                    <div id="rec-step-refine" class="rec-panel">
+                        <h2>Just a couple questions</h2>
+                        <p class="step-description">Help us narrow it down. Skip any you're not sure about.</p>
+                        <div id="rec-questions-container" class="questions-container"></div>
+                        <button id="rec-refine-next" class="btn btn-primary">Next</button>
                     </div>
 
                     <!-- Filters Step: Mode + Filters -->
@@ -452,14 +479,6 @@
                             <p class="rec-familiarity-hint">Influences which albums are suggested</p>
                         </div>
                         <button id="rec-setup-next" class="btn btn-primary">Next</button>
-                    </div>
-
-                    <!-- Questions Step -->
-                    <div id="rec-step-questions" class="rec-panel">
-                        <h2>Just a couple questions</h2>
-                        <p class="step-description">Help us narrow it down. Skip any you're not sure about.</p>
-                        <div id="rec-questions-container" class="rec-questions-container"></div>
-                        <button id="rec-get-recommendation" class="btn btn-primary">Get Recommendation</button>
                     </div>
 
                     <!-- Results Step -->
@@ -646,6 +665,19 @@
             </div>
         </div>
 
+        <!-- Playlist Restart Confirmation Modal -->
+        <div id="playlist-restart-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="playlist-restart-title">
+            <div class="modal-card">
+                <button class="modal-close" id="playlist-restart-cancel-x" aria-label="Close">&times;</button>
+                <h2 id="playlist-restart-title">Start a new playlist?</h2>
+                <p class="play-choice-description">You'll lose your current playlist progress.</p>
+                <div class="play-choice-buttons">
+                    <button id="playlist-restart-confirm" class="btn btn-primary play-choice-btn">Start Over</button>
+                    <button id="playlist-restart-cancel" class="btn btn-secondary play-choice-btn">Cancel</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Recommend Restart Confirmation Modal -->
         <div id="rec-restart-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="rec-restart-title">
             <div class="modal-card">
@@ -705,6 +737,12 @@
         <div id="success-toast" class="toast success hidden" role="status" aria-live="polite">
             <span id="success-message"></span>
             <button class="toast-close" onclick="hideSuccess()" aria-label="Dismiss message">&times;</button>
+        </div>
+
+        <!-- Undo Toast (history delete) -->
+        <div id="undo-toast" class="undo-toast hidden" role="status" aria-live="polite">
+            <span class="undo-toast-message">Removed from history</span>
+            <button id="undo-toast-btn" class="undo-toast-action">Undo</button>
         </div>
 
         <!-- Footer -->
