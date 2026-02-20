@@ -2393,7 +2393,13 @@ function setupEventListeners() {
             // Special case: clicking Recommend Album while already there
             if (hash === 'recommend-album' && state.view === 'recommend') {
                 if (state.rec.step !== 'prompt' || state.rec.loading) {
-                    openRecRestartModal();
+                    if (!state.rec.sessionId) {
+                        // Saved result — nothing to lose, go straight to step 1
+                        resetRecState();
+                        history.replaceState(null, '', '#recommend-album');
+                    } else {
+                        openRecRestartModal();
+                    }
                 }
                 return;
             }
