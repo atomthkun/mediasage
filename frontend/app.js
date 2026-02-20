@@ -4707,8 +4707,10 @@ function renderRecResults() {
                             <button class="btn btn-primary rec-play-btn" data-rating-keys="${escapeHtml(primary.track_rating_keys.join(','))}">&#9654; Play Now</button>
                             <button class="btn btn-secondary rec-save-btn" data-album="${escapeHtml(primary.album)}" data-artist="${escapeHtml(primary.artist)}" data-rating-keys="${escapeHtml(primary.track_rating_keys.join(','))}" data-pitch="${escapeHtml(pitch.full_text || '')}">Save to Playlist</button>
                         ` : ''}
-                        <button class="rec-action-link" id="rec-show-another">Show Me Another</button>
-                        <button class="rec-action-link rec-action-link--subtle" id="rec-start-over">Start over</button>
+                        ${state.rec.sessionId ? `
+                            <button class="rec-action-link" id="rec-show-another">Show Me Another</button>
+                            <button class="rec-action-link rec-action-link--subtle" id="rec-start-over">Start over</button>
+                        ` : ''}
                     </div>
                 </div>
             </div>
