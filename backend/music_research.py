@@ -464,13 +464,19 @@ class MusicResearchClient:
             logger.warning("Wikidata resolution failed for %s: %s", wikidata_url, e)
             return None
 
-    async def fetch_cover_art(self, release_mbid: str) -> str | None:
+    async def fetch_cover_art(
+        self, release_mbid: str, release_group_mbid: str | None = None,
+    ) -> str | None:
         """Fetch front cover art URL from Cover Art Archive.
+
+        Tries the specific release first, then falls back to the release-group
+        endpoint which aggregates art from all releases in the group.
 
         Returns the final image URL after redirect, or None if unavailable.
         """
         client = await self._get_client()
 
+        # Try specific release first
         try:
             resp = await client.get(
                 f"{COVER_ART_BASE}/release/{release_mbid}/front",
@@ -478,10 +484,25 @@ class MusicResearchClient:
             )
             if resp.status_code == 200:
                 return str(resp.url)
-            return None
         except Exception as e:
-            logger.warning("Cover Art Archive fetch failed for %s: %s", release_mbid, e)
-            return None
+            logger.warning("Cover Art Archive fetch failed for release %s: %s", release_mbid, e)
+
+        # Fall back to release-group (aggregates art from all editions)
+        if release_group_mbid:
+            try:
+                resp = await client.get(
+                    f"{COVER_ART_BASE}/release-group/{release_group_mbid}/front",
+                    follow_redirects=True,
+                )
+                if resp.status_code == 200:
+                    return str(resp.url)
+            except Exception as e:
+                logger.warning(
+                    "Cover Art Archive fetch failed for release-group %s: %s",
+                    release_group_mbid, e,
+                )
+
+        return None
 
     async def fetch_review_text(self, url: str) -> str | None:
         """Fetch and extract article text from a review URL.

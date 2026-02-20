@@ -930,7 +930,9 @@ async def _get_art_proxy_client() -> httpx.AsyncClient:
 async def _set_cover_art_from_research(rec, rd, research_client) -> None:
     """Fetch cover art from Cover Art Archive when rec has no art_url."""
     if not rec.art_url and rd.earliest_release_mbid:
-        art_url = await research_client.fetch_cover_art(rd.earliest_release_mbid)
+        art_url = await research_client.fetch_cover_art(
+            rd.earliest_release_mbid, release_group_mbid=rd.musicbrainz_id,
+        )
         if art_url:
             rec.art_url = f"/api/external-art?url={quote(art_url, safe='')}"
 
