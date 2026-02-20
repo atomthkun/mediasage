@@ -38,6 +38,11 @@
         <main class="main" id="main-content">
             <!-- Home View -->
             <div id="home-view" class="view">
+                <!-- Initial loading spinner (hidden once app initializes) -->
+                <div id="app-loading" class="app-loading" aria-label="Loading">
+                    <div class="spinner"></div>
+                </div>
+
                 <!-- Setup Wizard (shown on first launch) -->
                 <div id="setup-wizard" class="setup-wizard hidden">
                     <div class="setup-header">
@@ -180,7 +185,7 @@
                     </div>
                 </div>
 
-                <div class="home-content">
+                <div class="home-content home-content--loading">
                     <h2 class="home-greeting">What do you want to listen to?</h2>
                     <p class="home-subtitle">Create playlists and discover albums from your library.</p>
                     <div class="home-cards">
@@ -883,7 +888,7 @@
 
 
         <!-- Footer -->
-        <footer class="app-footer">
+        <footer class="app-footer app-footer--loading">
             <div class="footer-left">
                 <a href="https://github.com/ecwilsonaz/mediasage" target="_blank" rel="noopener" class="footer-brand">MediaSage <span id="footer-version"></span></a>
                 <span class="footer-separator">·</span>

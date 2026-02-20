@@ -3408,6 +3408,24 @@ body.no-scroll {
 
 
 /* =============================================================================
+   App Loading Spinner (shown before setup check completes)
+   ============================================================================= */
+
+.app-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    justify-content: center;
+    padding-top: 30vh;
+    z-index: 1;
+}
+
+.home-content--loading,
+.app-footer--loading {
+    opacity: 0;
+}
+
+/* =============================================================================
    Setup Wizard
    ============================================================================= */
 

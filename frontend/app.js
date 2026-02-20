@@ -5053,6 +5053,7 @@ const SETUP_AI_HINTS = {
 function enterSetupWizard(status) {
     state.setup.active = true;
     state.setup.status = status;
+    document.getElementById('app-loading')?.remove();
     const wizard = document.getElementById('setup-wizard');
     const homeContent = document.querySelector('#home-view .home-content');
     wizard.classList.remove('hidden');
@@ -5070,7 +5071,10 @@ function exitSetupWizard() {
     const wizard = document.getElementById('setup-wizard');
     const homeContent = document.querySelector('#home-view .home-content');
     wizard.classList.add('hidden');
-    if (homeContent) homeContent.classList.remove('hidden');
+    if (homeContent) {
+        homeContent.classList.remove('hidden', 'home-content--loading');
+    }
+    document.querySelector('.app-footer')?.classList.remove('app-footer--loading');
 
     // Run normal init
     loadSettings().then(() => {
@@ -5425,6 +5429,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         }
 
+        // Reveal home content + footer now that setup check is done
+        document.querySelector('#home-view .home-content')?.classList.remove('home-content--loading');
+        document.querySelector('.app-footer')?.classList.remove('app-footer--loading');
+
         // Check library cache status after config is loaded
         if (state.config?.plex_connected) {
             await checkLibraryStatus();
@@ -5432,6 +5440,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (error) {
         // Settings will show as not configured
         console.error('Initialization error:', error);
+    } finally {
+        document.getElementById('app-loading')?.remove();
+        // Don't reveal home content if setup wizard took over
+        if (!state.setup.active) {
+            document.querySelector('#home-view .home-content')?.classList.remove('home-content--loading');
+            document.querySelector('.app-footer')?.classList.remove('app-footer--loading');
+        }
     }
 
     // Initialize views AFTER config is loaded
