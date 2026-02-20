@@ -13,7 +13,7 @@ from backend.models import AppConfig, DefaultsConfig, LLMConfig, PlexConfig
 load_dotenv()
 
 # User config file path (for UI-saved settings)
-USER_CONFIG_PATH = Path("config.user.yaml")
+USER_CONFIG_PATH = Path("data/config.user.yaml")
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
