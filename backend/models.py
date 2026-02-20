@@ -509,6 +509,7 @@ class LibraryCacheStatusResponse(BaseModel):
     sync_progress: SyncProgress | None = None
     error: str | None = None
     plex_connected: bool
+    needs_resync: bool = False
 
 
 class SyncTriggerResponse(BaseModel):
@@ -697,6 +698,13 @@ class RecommendGenerateRequest(BaseModel):
     decades: list[str] = []
     familiarity_pref: Literal["any", "comfort", "rediscover", "hidden_gems"] = "any"
     max_albums: int = 2500
+
+    @field_validator("max_albums")
+    @classmethod
+    def validate_max_albums(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("max_albums must be non-negative")
+        return min(v, 50000)
 
 
 class RecommendGenerateResponse(BaseModel):

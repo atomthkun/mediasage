@@ -278,6 +278,7 @@ async function analyzeTrack(ratingKey) {
 // Module-level abort controller for SSE requests
 // Allows aborting previous request when starting a new one
 let currentAbortController = null;
+let pendingNavHash = null;  // stored when mid-flow modal intercepts navigation
 
 
 function generatePlaylistStream(request, onProgress, onComplete, onError) {
@@ -539,6 +540,13 @@ function navigateTo(view, mode) {
         if (appEl) appEl.classList.remove('app--wide');
         const appFooter = document.querySelector('.app-footer');
         if (appFooter) appFooter.classList.remove('app-footer--results');
+        // Reset stale state when arriving at a feature view from elsewhere
+        if (view === 'create' && state.step !== 'input') {
+            resetPlaylistState();
+        }
+        if (view === 'recommend' && state.rec.step !== 'prompt') {
+            resetRecState();
+        }
     }
     if (modeChanged) {
         state.step = 'input';
@@ -2156,8 +2164,19 @@ function hideSuccessModal() {
 
 let syncPollInterval = null;
 
-function showSyncModal() {
+function showSyncModal(reason = 'first-time') {
     const modal = document.getElementById('sync-modal');
+    const title = document.getElementById('sync-modal-title');
+    const desc = document.getElementById('sync-modal-description');
+
+    if (reason === 'upgrade') {
+        title.textContent = 'Updating Your Library';
+        desc.textContent = 'A new version needs to refresh your track cache. This may take a minute...';
+    } else {
+        title.textContent = 'Syncing Your Library';
+        desc.textContent = 'Building your local track cache for faster access...';
+    }
+
     modal.classList.remove('hidden');
     lockScroll();
     focusManager.openModal(modal);
@@ -2259,28 +2278,30 @@ async function checkLibraryStatus() {
         // Update footer status
         updateFooterLibraryStatus(status);
 
-        // If cache is empty and Plex is connected, trigger sync
-        if (status.track_count === 0 && status.plex_connected && !status.is_syncing) {
-            if (!status.synced_at) {
-                // Genuine first-time sync — blocking modal
-                await startFirstTimeSync();
-            } else {
-                // Cache empty after a previous sync (migration re-sync or error)
-                // Trigger silently — footer shows progress
+        // Upgrade resync: schema migration requires re-sync — blocking
+        if (status.needs_resync && status.plex_connected) {
+            showSyncModal('upgrade');
+            if (status.is_syncing && status.sync_progress) {
+                updateSyncProgress(status.sync_progress.phase, status.sync_progress.current, status.sync_progress.total);
+            } else if (!status.is_syncing) {
+                // Backend auto-resync hasn't started yet — trigger it
+                updateSyncProgress('fetching_albums', 0, 0);
                 try {
                     await triggerLibrarySync();
                 } catch { /* sync may already be in progress (409) */ }
-                startSyncPolling();
             }
+            startSyncPolling();
+        // First-time sync: no tracks ever — blocking
+        } else if (status.track_count === 0 && status.plex_connected && !status.is_syncing && !status.synced_at) {
+            await startFirstTimeSync();
+        // Any other sync in progress (manual refresh, stale re-sync) — background only
         } else if (status.is_syncing) {
-            // Only show blocking modal for first-time sync (no previous sync)
-            // Background refreshes (synced_at exists) poll silently
-            if (!status.synced_at) {
-                showSyncModal();
-                if (status.sync_progress) {
-                    updateSyncProgress(status.sync_progress.phase, status.sync_progress.current, status.sync_progress.total);
-                }
-            }
+            startSyncPolling();
+        // Cache empty after a previous sync (error, etc.) — trigger silently
+        } else if (status.track_count === 0 && status.plex_connected && status.synced_at) {
+            try {
+                await triggerLibrarySync();
+            } catch { /* sync may already be in progress (409) */ }
             startSyncPolling();
         }
 
@@ -2402,6 +2423,17 @@ function setupEventListeners() {
                     }
                     return;
                 }
+            }
+            // Warn if navigating away from a mid-flow state
+            if (state.view === 'create' && ((state.step !== 'input' && state.step !== 'results') || state.loading)) {
+                pendingNavHash = hash;
+                openPlaylistRestartModal();
+                return;
+            }
+            if (state.view === 'recommend' && ((state.rec.step !== 'prompt' && state.rec.step !== 'results') || state.rec.loading)) {
+                pendingNavHash = hash;
+                openRecRestartModal();
+                return;
             }
             location.hash = '#' + hash;
             // Close dropdown if open
@@ -3270,8 +3302,8 @@ function dismissClientPicker() { dismissModal('client-picker-modal'); }
 function dismissPlayChoice() { dismissModal('play-choice-modal', () => { state._pendingClientId = null; }); }
 function dismissPlaySuccess() { dismissModal('play-success-modal'); }
 function dismissUpdateSuccess() { dismissModal('update-success-modal'); }
-function dismissRecRestartModal() { dismissModal('rec-restart-modal'); }
-function dismissPlaylistRestartModal() { dismissModal('playlist-restart-modal'); }
+function dismissRecRestartModal() { pendingNavHash = null; dismissModal('rec-restart-modal'); }
+function dismissPlaylistRestartModal() { pendingNavHash = null; dismissModal('playlist-restart-modal'); }
 
 function openRecRestartModal() {
     const modal = document.getElementById('rec-restart-modal');
@@ -3858,96 +3890,12 @@ const REC_PROMPT_GROUPS = [
     ],
 ];
 
-let recSyncPollInterval = null;
-
 async function initRecommendView() {
-    // Check if we need to show sync progress instead of the normal UI
     if (state.config?.plex_connected) {
-        try {
-            const status = await fetchLibraryStatus();
-            if (status.is_syncing) {
-                // Check if album candidates exist yet
-                const preview = await apiCall('/recommend/albums/preview');
-                if (preview.matching_albums === 0) {
-                    showRecSyncOverlay(status);
-                    return;
-                }
-            }
-        } catch {
-            // If status check fails, proceed with normal init
-        }
         loadRecommendFilters();
     }
     renderPromptPills('rec-prompt-pills', 'rec-prompt-shuffle', REC_PROMPT_GROUPS);
     updateRecStep();
-}
-
-function showRecSyncOverlay(status) {
-    const overlay = document.getElementById('rec-sync-overlay');
-    const progress = document.getElementById('rec-steps');
-    const content = document.querySelector('.rec-step-content');
-    if (!overlay) return;
-
-    // Hide normal UI, show overlay
-    overlay.classList.remove('hidden');
-    if (progress) progress.style.display = 'none';
-    if (content) content.style.display = 'none';
-
-    // Update progress if available
-    if (status.sync_progress) {
-        updateRecSyncProgress(status.sync_progress);
-    }
-
-    // Start polling for completion
-    if (recSyncPollInterval) clearInterval(recSyncPollInterval);
-    recSyncPollInterval = setInterval(async () => {
-        try {
-            const s = await fetchLibraryStatus();
-            if (s.is_syncing && s.sync_progress) {
-                updateRecSyncProgress(s.sync_progress);
-            } else if (!s.is_syncing) {
-                clearInterval(recSyncPollInterval);
-                recSyncPollInterval = null;
-                hideRecSyncOverlay();
-                // Now initialize the real recommend view
-                if (state.config?.plex_connected) {
-                    loadRecommendFilters();
-                }
-                renderPromptPills('rec-prompt-pills', 'rec-prompt-shuffle', REC_PROMPT_GROUPS);
-                updateRecStep();
-            }
-        } catch {
-            // Keep polling on transient errors
-        }
-    }, 1500);
-}
-
-function updateRecSyncProgress(syncProgress) {
-    const fill = document.getElementById('rec-sync-progress-fill');
-    const text = document.getElementById('rec-sync-progress-text');
-    if (!fill || !text) return;
-
-    const { phase, current, total } = syncProgress;
-    if (total > 0) {
-        const pct = Math.round((current / total) * 100);
-        fill.style.width = `${pct}%`;
-        text.textContent = `Syncing tracks: ${current.toLocaleString()} / ${total.toLocaleString()} (${pct}%)`;
-    } else if (phase === 'fetching_albums') {
-        fill.style.width = '0%';
-        text.textContent = 'Fetching album metadata...';
-    } else if (phase === 'fetching') {
-        fill.style.width = '0%';
-        text.textContent = 'Fetching tracks from Plex...';
-    }
-}
-
-function hideRecSyncOverlay() {
-    const overlay = document.getElementById('rec-sync-overlay');
-    const progress = document.getElementById('rec-steps');
-    const content = document.querySelector('.rec-step-content');
-    if (overlay) overlay.classList.add('hidden');
-    if (progress) progress.style.display = '';
-    if (content) content.style.display = '';
 }
 
 async function loadRecommendFilters() {
@@ -4940,20 +4888,30 @@ function setupRecEventListeners() {
 
     // Restart confirmation modal buttons
     document.getElementById('rec-restart-confirm')?.addEventListener('click', () => {
+        const navHash = pendingNavHash;
         dismissRecRestartModal();
         hideStepLoading();
         resetRecState();
-        history.replaceState(null, '', '#recommend-album');
+        if (navHash) {
+            location.hash = '#' + navHash;
+        } else {
+            history.replaceState(null, '', '#recommend-album');
+        }
     });
     document.getElementById('rec-restart-cancel')?.addEventListener('click', dismissRecRestartModal);
     document.getElementById('rec-restart-cancel-x')?.addEventListener('click', dismissRecRestartModal);
 
     // Playlist restart confirmation modal buttons
     document.getElementById('playlist-restart-confirm')?.addEventListener('click', () => {
+        const navHash = pendingNavHash;
         dismissPlaylistRestartModal();
         setLoading(false);
         resetPlaylistState();
-        history.replaceState(null, '', '#' + hashForCurrentState());
+        if (navHash) {
+            location.hash = '#' + navHash;
+        } else {
+            history.replaceState(null, '', '#' + hashForCurrentState());
+        }
     });
     document.getElementById('playlist-restart-cancel')?.addEventListener('click', dismissPlaylistRestartModal);
     document.getElementById('playlist-restart-cancel-x')?.addEventListener('click', dismissPlaylistRestartModal);

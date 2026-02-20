@@ -551,6 +551,10 @@ def sync_library(
 
         logger.info("Sync complete: %d tracks in %dms", synced_count, duration_ms)
 
+        # Clear migration flag — new columns are now populated
+        global _migration_applied
+        _migration_applied = False
+
         return {
             "success": True,
             "track_count": synced_count,
@@ -672,14 +676,17 @@ def needs_resync() -> bool:
     """Check if a schema migration was applied that requires a re-sync.
 
     Returns:
-        True if tracks exist but need re-sync to populate new columns.
+        True if a migration was applied and sync hasn't completed yet.
+        Safe for fresh DBs: _migration_applied is False when CREATE TABLE
+        already includes all columns (ALTER TABLE no-ops).
     """
-    return _migration_applied and has_cached_tracks()
+    return _migration_applied
 
 
 def get_album_candidates(
     genres: list[str] | None = None,
     decades: list[str] | None = None,
+    exclude_live: bool = True,
 ) -> list[dict[str, Any]]:
     """Get album candidates aggregated from cached tracks.
 
@@ -689,6 +696,7 @@ def get_album_candidates(
     Args:
         genres: Optional genre filter (OR matching)
         decades: Optional decade filter (OR matching, e.g. "1990s")
+        exclude_live: Exclude live recordings (default True)
 
     Returns:
         List of album dicts with parent_rating_key, album, album_artist,
@@ -697,6 +705,8 @@ def get_album_candidates(
     conn = ensure_db_initialized()
     try:
         conditions = ["parent_rating_key IS NOT NULL", "parent_rating_key != ''"]
+        if exclude_live:
+            conditions.append("is_live = 0")
         params: list[Any] = []
 
         if decades:

@@ -326,18 +326,6 @@
                     </div>
                 </div>
 
-                <!-- Sync Progress Modal (First-time sync) -->
-                <div id="sync-modal" class="sync-modal hidden" role="dialog" aria-modal="true" aria-labelledby="sync-modal-title">
-                    <div class="sync-modal-content">
-                        <h2 id="sync-modal-title">Syncing Your Library</h2>
-                        <p class="sync-modal-description">Building your local track cache for faster access...</p>
-                        <div class="sync-progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Library sync progress">
-                            <div id="sync-progress-fill" class="sync-progress-fill"></div>
-                        </div>
-                        <p id="sync-progress-text" class="sync-progress-text">0 / 0 tracks</p>
-                    </div>
-                </div>
-
                 <!-- Success Modal -->
                 <div id="success-modal" class="success-modal hidden" role="dialog" aria-modal="true" aria-labelledby="success-modal-title">
                     <div class="success-modal-content">
@@ -380,18 +368,6 @@
 
             <!-- Recommend Album View -->
             <div id="recommend-view" class="view">
-                <!-- Sync Progress Overlay (shown during migration re-sync) -->
-                <div id="rec-sync-overlay" class="rec-sync-overlay hidden" role="status" aria-live="polite">
-                    <div class="rec-sync-content">
-                        <h2>Updating Library</h2>
-                        <p>Your library is being synced to enable album recommendations.</p>
-                        <div class="rec-sync-progress-bar">
-                            <div id="rec-sync-progress-fill" class="rec-sync-progress-fill"></div>
-                        </div>
-                        <p id="rec-sync-progress-text" class="rec-sync-progress-text">Starting sync...</p>
-                    </div>
-                </div>
-
                 <!-- 4-Step Progress Bar -->
                 <div id="rec-steps" class="step-progress" role="navigation" aria-label="Recommendation steps">
                     <div class="step active" data-step="prompt">
@@ -632,6 +608,18 @@
                 </section>
             </div>
         </main>
+
+        <!-- Sync Progress Modal (global – blocks UI for first-time and upgrade syncs) -->
+        <div id="sync-modal" class="sync-modal hidden" role="dialog" aria-modal="true" aria-labelledby="sync-modal-title">
+            <div class="sync-modal-content">
+                <h2 id="sync-modal-title"></h2>
+                <p id="sync-modal-description" class="sync-modal-description"></p>
+                <div class="sync-progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Library sync progress">
+                    <div id="sync-progress-fill" class="sync-progress-fill"></div>
+                </div>
+                <p id="sync-progress-text" class="sync-progress-text">0 / 0 tracks</p>
+            </div>
+        </div>
 
         <!-- Step-Based Loading Overlay (global – used by both playlist + album flows) -->
         <div id="step-loading-overlay" class="step-loading-overlay hidden" role="status" aria-live="polite" aria-busy="true">

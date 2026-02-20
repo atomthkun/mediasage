@@ -309,6 +309,7 @@ async def get_library_status() -> LibraryCacheStatusResponse:
         sync_progress=sync_progress,
         error=state["error"],
         plex_connected=plex_client.is_connected() if plex_client else False,
+        needs_resync=library_cache.needs_resync(),
     )
 
 

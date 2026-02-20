@@ -203,8 +203,8 @@ body {
 }
 
 .nav-chevron {
-    font-size: 0.6rem;
-    opacity: 0.6;
+    font-size: 0.75rem;
+    opacity: 0.8;
     transition: transform var(--transition-fast);
 }
 
@@ -2504,55 +2504,6 @@ body.no-scroll {
 }
 
 /* Sync Progress Overlay */
-.rec-sync-overlay {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 300px;
-    padding: 2rem;
-}
-
-.rec-sync-overlay.hidden {
-    display: none;
-}
-
-.rec-sync-content {
-    text-align: center;
-    max-width: 400px;
-}
-
-.rec-sync-content h2 {
-    color: var(--accent);
-    margin-bottom: 0.5rem;
-}
-
-.rec-sync-content p {
-    color: var(--text-secondary);
-    margin-bottom: 1.25rem;
-}
-
-.rec-sync-progress-bar {
-    width: 100%;
-    height: 6px;
-    background: var(--bg-tertiary);
-    border-radius: 3px;
-    overflow: hidden;
-    margin-bottom: 0.75rem;
-}
-
-.rec-sync-progress-fill {
-    height: 100%;
-    background: var(--accent);
-    border-radius: 3px;
-    width: 0%;
-    transition: width 0.3s ease;
-}
-
-.rec-sync-progress-text {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-}
-
 /* Rec step progress bar — now uses shared .step-progress rules above */
 
 /* Step Panels */
