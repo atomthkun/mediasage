@@ -677,11 +677,12 @@ function dateGroupLabel(isoString) {
     return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 }
 
-/** Icon for result type */
+/** Icon for result type (inline SVGs at 16x16, matching Lucide home-card icons) */
 function historyIcon(type) {
-    if (type === 'album_recommendation') return '\u{1F4BF}'; // 💿
-    if (type === 'seed_playlist') return '\u{1F331}'; // 🌱
-    return '\u{1F9E0}'; // 🧠
+    const attrs = 'xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+    if (type === 'album_recommendation') return `<svg ${attrs}><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2"/></svg>`;
+    if (type === 'seed_playlist') return `<svg ${attrs}><path d="M14 9.536V7a4 4 0 0 1 4-4h1.5a.5.5 0 0 1 .5.5V5a4 4 0 0 1-4 4 4 4 0 0 0-4 4c0 2 1 3 1 5a5 5 0 0 1-1 3"/><path d="M4 9a5 5 0 0 1 8 4 5 5 0 0 1-8-4"/><path d="M5 21h14"/></svg>`;
+    return `<svg ${attrs}><path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/></svg>`;
 }
 
 /** Icon title for result type */
@@ -4013,8 +4014,9 @@ function updateRecStep() {
         connector.classList.toggle('completed', i < currentIndex);
     });
 
-    // Hide progress bar on results
+    // Hide progress bar on results and scroll to top
     const isResults = state.rec.step === 'results';
+    if (isResults) window.scrollTo(0, 0);
     const recProgress = document.getElementById('rec-steps');
     if (recProgress) {
         recProgress.style.display = isResults ? 'none' : '';

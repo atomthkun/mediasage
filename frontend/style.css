@@ -305,8 +305,16 @@ body {
 }
 
 .home-card-icon {
-    font-size: 2rem;
     margin-bottom: 12px;
+    color: var(--text-secondary);
+}
+
+.home-card-icon svg {
+    display: block;
+    width: 40px;
+    height: 40px;
+    margin: 0 auto;
+    stroke-width: 1.25;
 }
 
 .home-card-title {
@@ -320,6 +328,7 @@ body {
     color: var(--text-muted);
     line-height: 1.4;
 }
+
 
 .home-history {
     text-align: left;
@@ -640,6 +649,7 @@ textarea {
     background: var(--bg-tertiary);
     border: 1px solid transparent;
     border-radius: var(--radius-full);
+    color: var(--text-primary);
     font-size: var(--font-size-sm);
     cursor: pointer;
     transition: all var(--transition-fast);
@@ -2451,8 +2461,62 @@ body.no-scroll {
 
 /* Compact mobile overrides — narrower than touch-target query */
 @media (max-width: 600px) {
+    /* Hide redundant nav — cards already provide these entry points */
+    .nav-dropdown,
+    .nav-btn[data-nav="recommend-album"] {
+        display: none;
+    }
+
+    /* Compact home spacing to surface history above the fold */
+    .home-content {
+        padding: 16px 0;
+    }
+
+    .home-greeting {
+        font-size: 1.25rem;
+        margin-bottom: 4px;
+    }
+
+    .home-subtitle {
+        font-size: 0.875rem;
+        margin-bottom: 16px;
+    }
+
     .home-cards {
         grid-template-columns: 1fr;
+        gap: 8px;
+        margin-bottom: 16px;
+    }
+
+    /* Horizontal compact card layout */
+    .home-card {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 16px;
+        text-align: left;
+    }
+
+    .home-card-icon {
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg-tertiary);
+        border-radius: var(--radius-md);
+        flex-shrink: 0;
+        margin-bottom: 0;
+    }
+
+    .home-card-icon svg {
+        width: 20px;
+        height: 20px;
+        stroke-width: 2;
+    }
+
+    .home-card-text {
+        min-width: 0;
     }
 
     .nav-dropdown-trigger {
@@ -2484,6 +2548,10 @@ body.no-scroll {
 
     .step-label {
         display: none;
+    }
+
+    .step-connector {
+        margin-bottom: 0;
     }
 
     .btn-label-long {
@@ -3343,13 +3411,15 @@ body.no-scroll {
 
 /* Mobile overrides */
 @media (max-width: 600px) {
+    .history-card {
+        padding: var(--spacing-sm) 28px var(--spacing-sm) 0;
+        gap: var(--spacing-sm);
+    }
     .history-card-delete {
         opacity: 1;
-    }
-    .history-card:hover .history-card-time {
-        opacity: 1;
+        right: var(--spacing-xs);
     }
     .history-card-time {
-        font-size: 0.7rem;
+        display: none;
     }
 }
