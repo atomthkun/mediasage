@@ -26,8 +26,54 @@ USER_AGENT = "MediaSage/1.0 (https://github.com/ecwilsonaz/mediasage)"
 MB_BASE_URL = "https://musicbrainz.org/ws/2"
 MB_RATE_LIMIT = 1.0  # seconds between requests
 
-WIKIPEDIA_API = "https://en.wikipedia.org/api/rest_v1/page/summary"
+WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
+
+# Keywords to drop Wikipedia sections — matched as substrings against section titles
+_WIKIPEDIA_DROP_KEYWORDS = [
+    "track listing", "chart", "certification", "personnel", "credits",
+    "reference", "external link", "see also", "note", "footnote",
+    "accolade", "award", "release history", "singles", "bibliography",
+    "further reading", "citation", "reissue", "remaster",
+]
+_WIKIPEDIA_MAX_CHARS = 8000  # Safety cap after filtering
 COVER_ART_BASE = "https://coverartarchive.org"
+
+
+def _filter_wikipedia_sections(text: str) -> str:
+    """Filter Wikipedia plain text to keep only useful sections.
+
+    Splits on MediaWiki section headers (== Title ==), drops sections
+    whose titles contain any keyword from _WIKIPEDIA_DROP_KEYWORDS,
+    and rejoins the rest. The lead section (before any header) is always
+    kept. Result is capped at _WIKIPEDIA_MAX_CHARS on a paragraph boundary.
+    """
+    # Split on == Section == headers, keeping the headers
+    parts = re.split(r"(^={2,}\s*.+?\s*={2,}\s*$)", text, flags=re.MULTILINE)
+
+    result = []
+    skip = False
+    for part in parts:
+        # Check if this part is a section header
+        header_match = re.match(r"^={2,}\s*(.+?)\s*={2,}\s*$", part.strip())
+        if header_match:
+            section_name = header_match.group(1).strip().lower()
+            skip = any(kw in section_name for kw in _WIKIPEDIA_DROP_KEYWORDS)
+            if not skip:
+                result.append(part)
+        elif not skip:
+            result.append(part)
+
+    filtered = "".join(result).strip()
+
+    # Cap on a paragraph boundary to avoid mid-sentence cuts
+    if len(filtered) > _WIKIPEDIA_MAX_CHARS:
+        cut = filtered[:_WIKIPEDIA_MAX_CHARS].rfind("\n\n")
+        if cut > _WIKIPEDIA_MAX_CHARS // 2:
+            filtered = filtered[:cut].strip()
+        else:
+            filtered = filtered[:_WIKIPEDIA_MAX_CHARS].strip()
+
+    return filtered
 
 
 def _is_safe_url(url: str) -> bool:
@@ -337,13 +383,17 @@ class MusicResearchClient:
             return None
 
     async def fetch_wikipedia_summary(self, wikipedia_url: str) -> str | None:
-        """Fetch article summary from Wikipedia.
+        """Fetch article extract from Wikipedia, keeping only useful sections.
+
+        Uses the MediaWiki extracts API to get the full article as plain text,
+        then drops low-value sections (charts, track listing, references, etc.)
+        to keep only content useful for fact-grounding pitches.
 
         Args:
             wikipedia_url: Full Wikipedia article URL
 
         Returns:
-            Summary text, or None on failure.
+            Filtered article text, or None on failure.
         """
         client = await self._get_client()
 
@@ -355,10 +405,24 @@ class MusicResearchClient:
                 return None
             title = unquote(parts[1])
 
-            resp = await client.get(f"{WIKIPEDIA_API}/{title}")
+            resp = await client.get(WIKIPEDIA_API, params={
+                "action": "query",
+                "titles": title,
+                "prop": "extracts",
+                "explaintext": "true",
+                "format": "json",
+            })
             resp.raise_for_status()
             data = resp.json()
-            return data.get("extract")
+            pages = data.get("query", {}).get("pages", {})
+            if not pages:
+                return None
+            page = next(iter(pages.values()))
+            full_text = page.get("extract", "")
+            if not full_text:
+                return None
+
+            return _filter_wikipedia_sections(full_text)
         except Exception as e:
             logger.warning("Wikipedia fetch failed for %s: %s", wikipedia_url, e)
             return None
