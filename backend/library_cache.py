@@ -9,6 +9,7 @@ import json
 import logging
 import random
 import re
+import secrets
 import sqlite3
 import threading
 import time
@@ -118,6 +119,22 @@ def init_schema(conn: sqlite3.Connection) -> bool:
 
         -- Ensure sync_state has exactly one row
         INSERT OR IGNORE INTO sync_state (id) VALUES (1);
+
+        -- Results table: persistent storage for generated playlists and recommendations
+        CREATE TABLE IF NOT EXISTS results (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            snapshot JSON NOT NULL,
+            track_count INTEGER NOT NULL,
+            artist TEXT,
+            art_rating_key TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_results_type_created ON results(type, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_results_created_at ON results(created_at DESC);
     """)
 
     # Migration: add parent_rating_key column if missing (for pre-existing databases)
@@ -141,6 +158,13 @@ def init_schema(conn: sqlite3.Connection) -> bool:
         conn.execute("ALTER TABLE tracks ADD COLUMN last_viewed_at TEXT")
         migrated = True
         logger.info("Migration applied: added last_viewed_at column")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add subtitle column to results table
+    try:
+        conn.execute("ALTER TABLE results ADD COLUMN subtitle TEXT")
+        logger.info("Migration applied: added subtitle column to results")
     except sqlite3.OperationalError:
         pass  # Column already exists
 
@@ -850,5 +874,167 @@ def get_album_familiarity(
             }
 
         return result
+    finally:
+        conn.close()
+
+
+# =============================================================================
+# Results Persistence
+# =============================================================================
+
+
+def save_result(
+    type: str,
+    title: str,
+    prompt: str,
+    snapshot: dict,
+    track_count: int,
+    artist: str | None = None,
+    art_rating_key: str | None = None,
+    subtitle: str | None = None,
+) -> str:
+    """Save a generated result and return its unique ID.
+
+    Args:
+        type: "prompt_playlist", "seed_playlist", or "album_recommendation"
+        title: Display title for the result
+        prompt: Original user prompt
+        snapshot: Full serialized response (GenerateResponse or RecommendGenerateResponse)
+        track_count: Number of tracks in the result
+        artist: Primary artist (for album recs)
+        art_rating_key: Rating key for thumbnail art
+        subtitle: Pre-computed subtitle for history feed cards
+
+    Returns:
+        8-char hex ID for the saved result
+    """
+    conn = ensure_db_initialized()
+    try:
+        # Generate collision-resistant ID
+        for _ in range(10):
+            result_id = secrets.token_hex(4)
+            existing = conn.execute(
+                "SELECT 1 FROM results WHERE id = ?", (result_id,)
+            ).fetchone()
+            if not existing:
+                break
+        else:
+            raise RuntimeError("Failed to generate unique result ID")
+
+        conn.execute(
+            """INSERT INTO results (id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (result_id, type, title, prompt, json.dumps(snapshot), track_count, artist, art_rating_key, subtitle),
+        )
+        conn.commit()
+        logger.info("Saved result %s (type=%s, tracks=%d)", result_id, type, track_count)
+        return result_id
+    finally:
+        conn.close()
+
+
+def get_result(result_id: str) -> dict[str, Any] | None:
+    """Fetch a single result by ID, including its snapshot.
+
+    Returns:
+        Dict with all columns (snapshot parsed from JSON), or None if not found.
+    """
+    conn = ensure_db_initialized()
+    try:
+        row = conn.execute(
+            "SELECT id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle, created_at FROM results WHERE id = ?",
+            (result_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "type": row["type"],
+            "title": row["title"],
+            "prompt": row["prompt"],
+            "snapshot": json.loads(row["snapshot"]),
+            "track_count": row["track_count"],
+            "artist": row["artist"],
+            "art_rating_key": row["art_rating_key"],
+            "subtitle": row["subtitle"],
+            "created_at": row["created_at"],
+        }
+    finally:
+        conn.close()
+
+
+def list_results(
+    type: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    """List results ordered by created_at DESC, without snapshots.
+
+    Args:
+        type: Optional type filter (can be comma-separated for multiple)
+        limit: Max results to return
+        offset: Pagination offset
+
+    Returns:
+        Tuple of (list of result dicts without snapshot, total count)
+    """
+    conn = ensure_db_initialized()
+    try:
+        where_clause = ""
+        params: list[Any] = []
+
+        if type:
+            types = [t.strip() for t in type.split(",") if t.strip()]
+            placeholders = ",".join("?" for _ in types)
+            where_clause = f"WHERE type IN ({placeholders})"
+            params = types
+
+        # Get total count
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM results {where_clause}", params
+        ).fetchone()[0]
+
+        # Get page
+        rows = conn.execute(
+            f"""SELECT id, type, title, prompt, track_count, artist, art_rating_key, subtitle, created_at
+                FROM results {where_clause}
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?""",
+            params + [limit, offset],
+        ).fetchall()
+
+        results = [
+            {
+                "id": row["id"],
+                "type": row["type"],
+                "title": row["title"],
+                "prompt": row["prompt"],
+                "track_count": row["track_count"],
+                "artist": row["artist"],
+                "art_rating_key": row["art_rating_key"],
+                "subtitle": row["subtitle"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+        return results, total
+    finally:
+        conn.close()
+
+
+def delete_result(result_id: str) -> bool:
+    """Delete a result by ID.
+
+    Returns:
+        True if a row was deleted, False if not found.
+    """
+    conn = ensure_db_initialized()
+    try:
+        cursor = conn.execute("DELETE FROM results WHERE id = ?", (result_id,))
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info("Deleted result %s", result_id)
+        return deleted
     finally:
         conn.close()

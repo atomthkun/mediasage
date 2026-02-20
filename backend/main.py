@@ -42,6 +42,9 @@ from backend.models import (
     RecommendQuestionsResponse,
     RecommendSwitchModeRequest,
     RecommendSwitchModeResponse,
+    ResultDetail,
+    ResultListItem,
+    ResultListResponse,
     SavePlaylistRequest,
     UpdatePlaylistRequest,
     UpdatePlaylistResponse,
@@ -579,6 +582,7 @@ async def generate_playlist(request: GenerateRequest) -> GenerateResponse:
             seed_track=seed_track,
             selected_dimensions=selected_dimensions,
             additional_notes=request.additional_notes,
+            refinement_answers=request.refinement_answers,
             genres=request.genres,
             decades=request.decades,
             track_count=request.track_count,
@@ -620,6 +624,7 @@ async def generate_playlist_sse(request: GenerateRequest) -> StreamingResponse:
             seed_track=seed_track,
             selected_dimensions=selected_dimensions,
             additional_notes=request.additional_notes,
+            refinement_answers=request.refinement_answers,
             genres=request.genres,
             decades=request.decades,
             track_count=request.track_count,
@@ -858,54 +863,10 @@ async def recommend_questions(request: RecommendQuestionsRequest) -> RecommendQu
     if not pipeline:
         raise HTTPException(status_code=503, detail="LLM not configured")
 
-    # Get album candidates
-    genre_list = request.genres if request.genres else None
-    decade_list = request.decades if request.decades else None
-
-    # Always load candidates (needed for library mode and taste profile in discovery mode)
-    from backend.models import AlbumCandidate, RecommendSessionState
-    candidates = []
-    taste_profile = None
-
-    if not library_cache.has_cached_tracks():
-        if request.mode == "library":
-            raise HTTPException(status_code=400, detail="Library cache is empty. Please sync your library first.")
-        elif request.mode == "discovery":
-            raise HTTPException(status_code=400, detail="Library cache is empty. Discovery mode needs your library to build a taste profile. Please sync first.")
-    else:
-        candidates_raw = await asyncio.to_thread(
-            library_cache.get_album_candidates,
-            genres=genre_list if request.mode == "library" else None,
-            decades=decade_list if request.mode == "library" else None,
-        )
-
-        if request.mode == "library" and not candidates_raw:
-            # Check if tracks exist but lack parent_rating_key (needs re-sync)
-            if library_cache.has_cached_tracks():
-                sync_state = library_cache.get_sync_state()
-                if sync_state["is_syncing"]:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Library sync in progress. Album recommendations will be available once it completes.",
-                    )
-                raise HTTPException(
-                    status_code=400,
-                    detail="Your library needs a fresh sync to enable album recommendations. Please re-sync from Settings or the footer Refresh link.",
-                )
-            raise HTTPException(status_code=400, detail="No albums match your filters. Try broadening your genre or decade selection.")
-
-        candidates = [AlbumCandidate(**c) for c in candidates_raw]
-
-        # Build taste profile for discovery mode (from unfiltered candidates)
-        if request.mode == "discovery":
-            all_raw = await asyncio.to_thread(
-                library_cache.get_album_candidates, genres=None, decades=None
-            )
-            all_candidates = [AlbumCandidate(**c) for c in all_raw]
-            taste_profile = pipeline.build_taste_profile(all_candidates)
+    from backend.models import RecommendSessionState
 
     try:
-        # Run gap analysis + question generation
+        # Run gap analysis + question generation (only needs the prompt)
         dimension_ids = await asyncio.to_thread(
             pipeline.gap_analysis, request.prompt, "pending"
         )
@@ -913,24 +874,22 @@ async def recommend_questions(request: RecommendQuestionsRequest) -> RecommendQu
             pipeline.generate_questions, request.prompt, dimension_ids, "pending"
         )
 
-        # Create session
+        # Create lightweight session: just prompt + questions
         session_state = RecommendSessionState(
-            mode=request.mode,
+            mode="library",
             prompt=request.prompt,
-            filters={"genres": request.genres, "decades": request.decades},
+            filters={"genres": [], "decades": []},
             questions=questions,
-            album_candidates=candidates,
-            taste_profile=taste_profile,
-            familiarity_pref=request.familiarity_pref,
+            album_candidates=[],
+            taste_profile=None,
+            familiarity_pref="any",
         )
         session_id = pipeline.create_session(session_state)
 
-        # Calculate token count and cost
-        # (these are tracked internally via _log_cost but we sum for the response)
         return RecommendQuestionsResponse(
             questions=questions,
             session_id=session_id,
-            token_count=0,  # Will be populated from actual LLM calls
+            token_count=0,
             estimated_cost=0.0,
         )
     except Exception as e:
@@ -951,27 +910,9 @@ async def recommend_switch_mode(request: RecommendSwitchModeRequest) -> Recommen
     if request.mode == old_session.mode:
         return RecommendSwitchModeResponse(session_id=request.session_id)
 
-    from backend.models import AlbumCandidate, RecommendSessionState
+    from backend.models import RecommendSessionState
 
-    # Rebuild candidates and taste profile for the new mode
-    candidates = []
-    taste_profile = None
-
-    if library_cache.has_cached_tracks():
-        candidates_raw = await asyncio.to_thread(
-            library_cache.get_album_candidates,
-            genres=(old_session.filters.get("genres") or None) if request.mode == "library" else None,
-            decades=(old_session.filters.get("decades") or None) if request.mode == "library" else None,
-        )
-        candidates = [AlbumCandidate(**c) for c in candidates_raw]
-
-        if request.mode == "discovery":
-            all_raw = await asyncio.to_thread(
-                library_cache.get_album_candidates, genres=None, decades=None
-            )
-            all_candidates = [AlbumCandidate(**c) for c in all_raw]
-            taste_profile = pipeline.build_taste_profile(all_candidates)
-
+    # Create new session with empty candidates — generate will load them
     new_session = RecommendSessionState(
         mode=request.mode,
         prompt=old_session.prompt,
@@ -979,8 +920,8 @@ async def recommend_switch_mode(request: RecommendSwitchModeRequest) -> Recommen
         questions=old_session.questions,
         answers=old_session.answers,
         answer_texts=old_session.answer_texts,
-        album_candidates=candidates,
-        taste_profile=taste_profile,
+        album_candidates=[],
+        taste_profile=None,
         familiarity_pref=old_session.familiarity_pref,
         previously_recommended=old_session.previously_recommended,
     )
@@ -1008,6 +949,53 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
     pipeline.update_session_answers(
         request.session_id, request.answers, request.answer_texts
     )
+
+    # Update session with mode/filters/familiarity from request
+    session.mode = request.mode
+    session.filters = {"genres": request.genres, "decades": request.decades}
+    session.familiarity_pref = request.familiarity_pref
+
+    # Load album candidates (moved here from /recommend/questions)
+    from backend.models import AlbumCandidate
+
+    genre_list = request.genres if request.genres else None
+    decade_list = request.decades if request.decades else None
+
+    if not library_cache.has_cached_tracks():
+        if request.mode == "library":
+            raise HTTPException(status_code=400, detail="Library cache is empty. Please sync your library first.")
+        elif request.mode == "discovery":
+            raise HTTPException(status_code=400, detail="Library cache is empty. Discovery mode needs your library to build a taste profile. Please sync first.")
+    else:
+        candidates_raw = await asyncio.to_thread(
+            library_cache.get_album_candidates,
+            genres=genre_list if request.mode == "library" else None,
+            decades=decade_list if request.mode == "library" else None,
+        )
+
+        if request.mode == "library" and not candidates_raw:
+            if library_cache.has_cached_tracks():
+                sync_state = library_cache.get_sync_state()
+                if sync_state["is_syncing"]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Library sync in progress. Album recommendations will be available once it completes.",
+                    )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Your library needs a fresh sync to enable album recommendations. Please re-sync from Settings or the footer Refresh link.",
+                )
+            raise HTTPException(status_code=400, detail="No albums match your filters. Try broadening your genre or decade selection.")
+
+        session.album_candidates = [AlbumCandidate(**c) for c in candidates_raw]
+
+        # Build taste profile for discovery mode
+        if request.mode == "discovery":
+            all_raw = await asyncio.to_thread(
+                library_cache.get_album_candidates, genres=None, decades=None
+            )
+            all_candidates = [AlbumCandidate(**c) for c in all_raw]
+            session.taste_profile = pipeline.build_taste_profile(all_candidates)
 
     def _apply_year_override(rec, rd, log):
         """Override rec.year with MusicBrainz release_date year when available."""
@@ -1234,7 +1222,39 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 estimated_cost=0.0,
                 research_warning=research_warning,
             )
-            yield f"event: result\ndata: {result.model_dump_json()}\n\n"
+
+            # Save result to history before emitting the final event
+            rec_result_id = None
+            try:
+                primary_rec = next((r for r in recommendations if r.rank == "primary"), None)
+                if primary_rec:
+                    rec_title = f"{primary_rec.album} by {primary_rec.artist}"
+                    rec_artist = primary_rec.artist
+                    rec_art_key = primary_rec.rating_key
+                    rec_subtitle = primary_rec.pitch.hook if primary_rec.pitch and primary_rec.pitch.hook else session.prompt
+                else:
+                    rec_title = "Album Recommendation"
+                    rec_artist = None
+                    rec_art_key = None
+                    rec_subtitle = session.prompt
+                rec_result_id = library_cache.save_result(
+                    type="album_recommendation",
+                    title=rec_title,
+                    prompt=session.prompt,
+                    snapshot=result.model_dump(mode="json"),
+                    track_count=len(recommendations),
+                    artist=rec_artist,
+                    art_rating_key=rec_art_key,
+                    subtitle=rec_subtitle,
+                )
+            except Exception as e:
+                _logging.getLogger(__name__).warning("Failed to save recommendation result: %s", e)
+
+            # Include result_id in the event payload
+            result_payload = result.model_dump(mode="json")
+            if rec_result_id:
+                result_payload["result_id"] = rec_result_id
+            yield f"event: result\ndata: {_json.dumps(result_payload)}\n\n"
 
             # Record shown albums so "Show me another" won't repeat them.
             # Keep only the last 30 (10 rounds) so older picks rotate back in.
@@ -1268,6 +1288,45 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# =============================================================================
+# Results Persistence Endpoints
+# =============================================================================
+
+
+@app.get("/api/results", response_model=ResultListResponse)
+async def list_results(
+    type: str | None = Query(None, description="Filter by type (comma-separated)"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> ResultListResponse:
+    """List saved results for the history view."""
+    results, total = await asyncio.to_thread(
+        library_cache.list_results, type=type, limit=limit, offset=offset
+    )
+    return ResultListResponse(
+        results=[ResultListItem(**r) for r in results],
+        total=total,
+    )
+
+
+@app.get("/api/results/{result_id}", response_model=ResultDetail)
+async def get_result(result_id: str) -> ResultDetail:
+    """Fetch a single saved result with full snapshot."""
+    result = await asyncio.to_thread(library_cache.get_result, result_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+    return ResultDetail(**result)
+
+
+@app.delete("/api/results/{result_id}", status_code=204)
+async def delete_result(result_id: str):
+    """Delete a saved result."""
+    deleted = await asyncio.to_thread(library_cache.delete_result, result_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Result not found")
+    return Response(status_code=204)
 
 
 # =============================================================================

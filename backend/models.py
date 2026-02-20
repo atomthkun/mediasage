@@ -218,6 +218,7 @@ class GenerateRequest(BaseModel):
     prompt: str | None = None
     seed_track: SeedTrackInput | None = None
     additional_notes: str | None = None
+    refinement_answers: list[str | None] | None = None
     genres: list[str]
     decades: list[str]
     track_count: int = 25
@@ -657,10 +658,6 @@ class RecommendQuestionsRequest(BaseModel):
     """Request to generate clarifying questions."""
 
     prompt: str
-    mode: Literal["library", "discovery"] = "library"
-    genres: list[str] = []
-    decades: list[str] = []
-    familiarity_pref: Literal["any", "comfort", "rediscover", "hidden_gems"] = "any"
 
 
 class RecommendQuestionsResponse(BaseModel):
@@ -691,6 +688,10 @@ class RecommendGenerateRequest(BaseModel):
     session_id: str
     answers: list[str | None]
     answer_texts: list[str] = []
+    mode: Literal["library", "discovery"] = "library"
+    genres: list[str] = []
+    decades: list[str] = []
+    familiarity_pref: Literal["any", "comfort", "rediscover", "hidden_gems"] = "any"
 
 
 class RecommendGenerateResponse(BaseModel):
@@ -709,3 +710,44 @@ class AlbumPreviewResponse(BaseModel):
     albums_to_send: int
     estimated_input_tokens: int = 0
     estimated_cost: float = 0.0
+
+
+# =============================================================================
+# Results Persistence Models
+# =============================================================================
+
+
+class ResultListItem(BaseModel):
+    """A saved result summary for history list (no snapshot)."""
+
+    id: str
+    type: str
+    title: str
+    prompt: str
+    track_count: int
+    artist: str | None = None
+    art_rating_key: str | None = None
+    subtitle: str | None = None
+    created_at: str
+
+
+class ResultListResponse(BaseModel):
+    """Paginated list of saved results."""
+
+    results: list[ResultListItem]
+    total: int
+
+
+class ResultDetail(BaseModel):
+    """Full saved result including snapshot for rendering."""
+
+    id: str
+    type: str
+    title: str
+    prompt: str
+    track_count: int
+    artist: str | None = None
+    art_rating_key: str | None = None
+    subtitle: str | None = None
+    created_at: str
+    snapshot: dict

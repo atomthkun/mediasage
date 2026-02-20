@@ -150,6 +150,7 @@ def generate_playlist_stream(
     seed_track: Track | None = None,
     selected_dimensions: list[str] | None = None,
     additional_notes: str | None = None,
+    refinement_answers: list[str | None] | None = None,
     genres: list[str] | None = None,
     decades: list[str] | None = None,
     track_count: int = 25,
@@ -238,6 +239,11 @@ def generate_playlist_stream(
 
         if additional_notes:
             generation_parts.append(f"Additional notes: {additional_notes}")
+
+        if refinement_answers:
+            answered = [a for a in refinement_answers if a]
+            if answered:
+                generation_parts.append(f"User preferences: {', '.join(answered)}")
 
         generation_parts.append(f"\nSelect {track_count} tracks from this library:\n{track_list}")
 
@@ -336,16 +342,46 @@ def generate_playlist_stream(
             logger.info("Emitting track batch %d-%d", i, i + len(batch))
             yield emit("tracks", {"batch": batch, "index": i})
 
+        # Save result to history before emitting the final event
+        result_id = None
+        try:
+            result_type = "seed_playlist" if seed_track else "prompt_playlist"
+            # Title: always use the LLM-generated playlist title
+            result_title = playlist_title
+            # Use first track's rating key for card thumbnail
+            first_art_key = matched_tracks[0].rating_key if matched_tracks else None
+            # Subtitle: seed playlists show origin track, prompt playlists show prompt + count
+            if seed_track:
+                result_subtitle = f"From: {seed_track.title} by {seed_track.artist} \u00b7 {len(matched_tracks)} tracks"
+            elif prompt:
+                result_subtitle = f"{prompt} \u00b7 {len(matched_tracks)} tracks"
+            else:
+                result_subtitle = f"{len(matched_tracks)} tracks"
+            result_id = library_cache.save_result(
+                type=result_type,
+                title=result_title,
+                prompt=prompt or "",
+                snapshot=result.model_dump(mode="json"),
+                track_count=len(matched_tracks),
+                art_rating_key=first_art_key,
+                subtitle=result_subtitle,
+            )
+        except Exception as e:
+            logger.warning("Failed to save result: %s", e)
+
         # Emit small complete event with just metadata
         logger.info("Emitting complete event")
-        yield emit("complete", {
+        complete_data = {
             "track_count": len(result.tracks),
             "token_count": result.token_count,
             "estimated_cost": result.estimated_cost,
             "playlist_title": result.playlist_title,
             "narrative": result.narrative,
             "track_reasons": result.track_reasons,
-        })
+        }
+        if result_id:
+            complete_data["result_id"] = result_id
+        yield emit("complete", complete_data)
         logger.info("Complete event emitted successfully")
 
         # Trailing padding to push complete event through network buffers (iOS Safari fix)
@@ -401,6 +437,7 @@ def generate_playlist(
     seed_track: Track | None = None,
     selected_dimensions: list[str] | None = None,
     additional_notes: str | None = None,
+    refinement_answers: list[str | None] | None = None,
     genres: list[str] | None = None,
     decades: list[str] | None = None,
     track_count: int = 25,
@@ -483,6 +520,11 @@ def generate_playlist(
 
     if additional_notes:
         generation_parts.append(f"Additional notes: {additional_notes}")
+
+    if refinement_answers:
+        answered = [a for a in refinement_answers if a]
+        if answered:
+            generation_parts.append(f"User preferences: {', '.join(answered)}")
 
     generation_parts.append(f"\nSelect {track_count} tracks from this library:\n{track_list}")
 
