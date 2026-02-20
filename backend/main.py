@@ -1679,5 +1679,5 @@ async def serve_index():
         v = get_version()
         html = html.replace("/static/style.css", f"/static/style.css?v={v}")
         html = html.replace("/static/app.js", f"/static/app.js?v={v}")
-        return HTMLResponse(html)
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
     return {"message": "MediaSage API is running. Frontend not found."}
