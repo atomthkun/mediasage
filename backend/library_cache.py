@@ -916,14 +916,14 @@ def save_result(
         subtitle: Pre-computed subtitle for history feed cards
 
     Returns:
-        8-char hex ID for the saved result
+        16-char hex ID for the saved result
     """
     conn = ensure_db_initialized()
     try:
         # Generate collision-resistant ID with INSERT OR IGNORE to handle
         # concurrent inserts that race past the existence check.
         for _ in range(10):
-            result_id = secrets.token_hex(4)
+            result_id = secrets.token_hex(8)
             cursor = conn.execute(
                 """INSERT OR IGNORE INTO results (id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",

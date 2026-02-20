@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -679,7 +680,8 @@ def _get_pipeline():
                 _recommendation_pipeline = RecommendationPipeline(config, llm_client)
                 # Migrate active sessions from old pipeline to preserve in-flight requests
                 if old_pipeline is not None:
-                    _recommendation_pipeline._sessions = old_pipeline._sessions
+                    with old_pipeline._session_lock:
+                        _recommendation_pipeline._sessions = dict(old_pipeline._sessions)
                 _recommendation_pipeline_llm = llm_client
     return _recommendation_pipeline
 
@@ -693,6 +695,21 @@ def _get_research_client():
                 from backend.music_research import MusicResearchClient
                 _music_research_client = MusicResearchClient()
     return _music_research_client
+
+
+def _apply_year_override(rec, rd, log):
+    """Override rec.year with MusicBrainz release_date year when available."""
+    if rd.release_date and len(rd.release_date) >= 4:
+        try:
+            mb_year = int(rd.release_date[:4])
+            if rec.year != mb_year:
+                log.info(
+                    "Year override: Plex=%s → MusicBrainz=%s for %s — %s",
+                    rec.year, mb_year, rec.artist, rec.album,
+                )
+                rec.year = mb_year
+        except ValueError:
+            pass
 
 
 @app.get("/api/recommend/albums/preview", response_model=AlbumPreviewResponse)
@@ -721,15 +738,18 @@ async def recommend_albums_preview(
     albums_to_send = min(matching_albums, max_albums) if max_albums > 0 else matching_albums
     config = get_config()
 
-    # Estimate tokens for 4 LLM calls using hardcoded empirical constants
+    # Estimate tokens for up to 7 LLM calls using hardcoded empirical constants
     # Gap analysis: ~800 input, ~50 output (analysis model)
     # Question gen: ~600 input, ~200 output (generation model)
     # Album selection: albums * TOKENS_PER_ALBUM + ~400 input, ~300 output (generation model)
     # Pitch writing: ~1500 input, ~800 output (analysis model)
-    analysis_input = 800 + 1500  # gap_analysis + pitch_writing
-    analysis_output = 50 + 800
-    generation_input = 600 + (albums_to_send * TOKENS_PER_ALBUM) + 400  # question_gen + selection
-    generation_output = 200 + 300
+    # Fact extraction: ~2000 input, ~500 output (generation model) — research-dependent
+    # Pitch validation: ~2000 input, ~200 output (analysis model) — research-dependent
+    # Pitch rewrite: ~1500 input, ~800 output (analysis model) — only if validation fails
+    analysis_input = 800 + 1500 + 2000 + 1500  # gap + pitch + validation + rewrite
+    analysis_output = 50 + 800 + 200 + 800
+    generation_input = 600 + (albums_to_send * TOKENS_PER_ALBUM) + 400 + 2000  # question + selection + extraction
+    generation_output = 200 + 300 + 500
 
     estimated_input_tokens = analysis_input + generation_input
 
@@ -909,9 +929,9 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
 
         loaded_candidates = [AlbumCandidate(**c) for c in candidates_raw]
 
-        # Cap albums sent to AI based on user-selected limit
+        # Cap albums sent to AI based on user-selected limit (random sample for unbiased selection)
         if request.max_albums > 0 and len(loaded_candidates) > request.max_albums:
-            loaded_candidates = loaded_candidates[:request.max_albums]
+            loaded_candidates = random.sample(loaded_candidates, request.max_albums)
 
         # Build taste profile for discovery mode
         if request.mode == "discovery":
@@ -935,21 +955,10 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
     # races — a concurrent "Show me another" request could mutate the session
     # while event_stream is still reading from it.
     _prompt = session.prompt
+    _answers = list(session.answers) if session.answers else []
+    _answer_texts = list(session.answer_texts) if session.answer_texts else []
+    _familiarity_pref = session.familiarity_pref
     _previously_recommended = list(session.previously_recommended) if session.previously_recommended else None
-
-    def _apply_year_override(rec, rd, log):
-        """Override rec.year with MusicBrainz release_date year when available."""
-        if rd.release_date and len(rd.release_date) >= 4:
-            try:
-                mb_year = int(rd.release_date[:4])
-                if rec.year != mb_year:
-                    log.info(
-                        "Year override: Plex=%s → MusicBrainz=%s for %s — %s",
-                        rec.year, mb_year, rec.artist, rec.album,
-                    )
-                    rec.year = mb_year
-            except ValueError:
-                pass
 
     async def event_stream():
         research_warning = None
@@ -984,11 +993,12 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 recommendations = await asyncio.to_thread(
                     pipeline.select_discovery_albums,
                     prompt=_prompt,
-                    answers=request.answers,
-                    answer_texts=request.answer_texts,
+                    answers=_answers,
+                    answer_texts=_answer_texts,
                     taste_profile=loaded_taste_profile,
                     session_id=request.session_id,
                     previously_recommended=_previously_recommended,
+                    max_exclusion_albums=request.max_albums if request.max_albums > 0 else 2500,
                 )
             else:
                 recommendations = await asyncio.to_thread(
@@ -1026,7 +1036,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                         if is_discovery:
                             valid = await asyncio.to_thread(
                                 pipeline.validate_discovery_album,
-                                primary, rd, session.prompt, request.session_id,
+                                primary, rd, _prompt, request.session_id,
                             )
                             if not valid:
                                 logger.info("Primary discovery album failed validation")
@@ -1036,7 +1046,12 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                         if not primary.art_url and rd.earliest_release_mbid:
                             art_url = await research_client.fetch_cover_art(rd.earliest_release_mbid)
                             if art_url:
-                                primary.art_url = art_url
+                                from urllib.parse import quote
+                                primary.art_url = f"/api/external-art?url={quote(art_url, safe='')}"
+                    elif is_discovery:
+                        # MusicBrainz couldn't verify this album exists
+                        logger.warning("Discovery album not found in MusicBrainz: %s — %s", primary.artist, primary.album)
+                        research_warning = "This album could not be verified in MusicBrainz — details may be approximate."
                 except Exception as e:
                     logger.warning("Primary research failed: %s", e)
                     research_warning = "Research was unavailable for the primary album — factual details could not be verified and may be approximate."
@@ -1057,7 +1072,8 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                         if not sec.art_url and rd.earliest_release_mbid:
                             art_url = await research_client.fetch_cover_art(rd.earliest_release_mbid)
                             if art_url:
-                                sec.art_url = art_url
+                                from urllib.parse import quote
+                                sec.art_url = f"/api/external-art?url={quote(art_url, safe='')}"
                 except Exception as e:
                     logger.warning("Secondary research failed for %s: %s", sec.album, e)
 
@@ -1086,12 +1102,12 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
             recommendations = await asyncio.to_thread(
                 pipeline.write_pitches,
                 recommendations=recommendations,
-                prompt=session.prompt,
-                answers=session.answers,
-                answer_texts=session.answer_texts,
+                prompt=_prompt,
+                answers=_answers,
+                answer_texts=_answer_texts,
                 session_id=request.session_id,
                 research=research_data if research_data else None,
-                familiarity_pref=session.familiarity_pref,
+                familiarity_pref=_familiarity_pref,
                 familiarity_data=familiarity_data,
                 extracted_facts=extracted_facts if extracted_facts else None,
             )
@@ -1117,11 +1133,11 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
 
                         # Build answers string for rewrite
                         answer_parts = []
-                        for i, ans in enumerate(session.answers):
+                        for i, ans in enumerate(_answers):
                             if ans:
                                 text = ans
-                                if i < len(session.answer_texts) and session.answer_texts[i]:
-                                    text += f" ({session.answer_texts[i]})"
+                                if i < len(_answer_texts) and _answer_texts[i]:
+                                    text += f" ({_answer_texts[i]})"
                                 answer_parts.append(text)
                         answers_str = "; ".join(answer_parts) if answer_parts else "no specific preferences"
 
@@ -1130,7 +1146,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                             rec=primary,
                             facts=extracted_facts[primary_key],
                             validation=validation,
-                            prompt=session.prompt,
+                            prompt=_prompt,
                             answers_str=answers_str,
                             session_id=request.session_id,
                         )
@@ -1261,7 +1277,7 @@ async def list_results(
     )
 
 
-_RESULT_ID_RE = re.compile(r"^[0-9a-f]{8}$")
+_RESULT_ID_RE = re.compile(r"^[0-9a-f]{8,16}$")
 
 
 @app.get("/api/results/{result_id}", response_model=ResultDetail)
@@ -1329,6 +1345,42 @@ async def get_album_art(rating_key: str):
                 )
         except Exception:
             pass
+
+    raise HTTPException(status_code=404, detail="Art not available")
+
+
+# Allowlist of external art domains (Cover Art Archive CDN)
+_EXTERNAL_ART_DOMAINS = {"coverartarchive.org", "archive.org", "ia600.us.archive.org"}
+
+
+@app.get("/api/external-art")
+async def get_external_art(url: str = Query(...)):
+    """Proxy external album art (e.g., Cover Art Archive) to avoid direct hotlinking."""
+    from urllib.parse import urlparse as _urlparse
+
+    parsed = _urlparse(url)
+    # Only allow HTTPS from known art CDN domains
+    if parsed.scheme != "https":
+        raise HTTPException(status_code=400, detail="Only HTTPS URLs allowed")
+    hostname = parsed.hostname or ""
+    if not any(hostname == d or hostname.endswith(f".{d}") for d in _EXTERNAL_ART_DOMAINS):
+        raise HTTPException(status_code=400, detail="Domain not allowed")
+
+    try:
+        global _art_proxy_client
+        if _art_proxy_client is None or _art_proxy_client.is_closed:
+            async with _art_proxy_lock:
+                if _art_proxy_client is None or _art_proxy_client.is_closed:
+                    _art_proxy_client = httpx.AsyncClient(timeout=10.0)
+        response = await _art_proxy_client.get(url, follow_redirects=True)
+        if response.status_code == 200:
+            return Response(
+                content=response.content,
+                media_type=response.headers.get("content-type", "image/jpeg"),
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+    except Exception:
+        pass
 
     raise HTTPException(status_code=404, detail="Art not available")
 

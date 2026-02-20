@@ -411,6 +411,8 @@ class RecommendationPipeline:
         self._log_cost("question_gen", response, session_id)
 
         raw = self.llm_client.parse_json_response(response)
+        if not isinstance(raw, list):
+            return []
         questions = []
         for item in raw[:2]:
             questions.append(ClarifyingQuestion(
@@ -758,17 +760,23 @@ class RecommendationPipeline:
             item = pitch_lookup.get(key)
 
             # Fallback: LLMs often drop parenthetical suffixes like "(Reissue)"
-            # so try substring matching on album name when artist matches exactly
+            # so try fuzzy matching on album name when artist matches well
             if item is None:
+                from rapidfuzz import fuzz
                 rec_artist_l = rec.artist.lower()
                 rec_album_l = rec.album.lower()
+                best_score = 0
+                best_val = None
                 for pkey, pval in pitch_lookup.items():
                     p_artist, p_album = pkey.split("|||", 1)
-                    if p_artist == rec_artist_l and (
-                        rec_album_l in p_album or p_album in rec_album_l
-                    ):
-                        item = pval
-                        break
+                    artist_score = fuzz.ratio(rec_artist_l, p_artist)
+                    album_score = fuzz.ratio(rec_album_l, p_album)
+                    combined = (artist_score + album_score) / 2
+                    if combined > best_score and artist_score >= 80 and album_score >= 60:
+                        best_score = combined
+                        best_val = pval
+                if best_val is not None:
+                    item = best_val
 
             if item is None:
                 item = {}
@@ -993,6 +1001,7 @@ class RecommendationPipeline:
         taste_profile: TasteProfile,
         session_id: str,
         previously_recommended: list[str] | None = None,
+        max_exclusion_albums: int = 2500,
     ) -> list[AlbumRecommendation]:
         """Select 1 primary + 2 secondary albums NOT in the user's library.
 
@@ -1010,11 +1019,12 @@ class RecommendationPipeline:
             f"Library size: {taste_profile.total_albums} albums"
         )
 
-        # Build exclusion list — send all owned albums so the LLM avoids them.
-        # At ~15 tokens per album, even 2000 albums is ~30K tokens (cheap).
-        # Post-filtering also catches any the LLM misses.
+        # Build exclusion list — send owned albums so the LLM avoids them.
+        # Capped at max_exclusion_albums to stay within context windows.
+        # Post-filtering via owned_set catches any the LLM misses.
+        exclusion_albums = taste_profile.owned_albums[:max_exclusion_albums]
         exclusion_text = "\n".join(
-            f"- {a['artist']} — {a['album']}" for a in taste_profile.owned_albums
+            f"- {a['artist']} — {a['album']}" for a in exclusion_albums
         )
 
         # Build answer context
@@ -1031,11 +1041,11 @@ class RecommendationPipeline:
 
         system = (
             "You are a music recommendation expert with encyclopedic knowledge. "
-            "Recommend 3 albums the user does NOT already own that match their request and taste profile. "
-            "The first pick is the PRIMARY recommendation (best match), the other two are SECONDARY.\n\n"
+            "Recommend 5 albums the user does NOT already own that match their request and taste profile. "
+            "The first pick is the PRIMARY recommendation (best match), the others are SECONDARY.\n\n"
             "IMPORTANT: Do NOT recommend any album from the exclusion list below. "
             "Recommend real, existing albums with correct artist names and years.\n\n"
-            "Return a JSON array of 3 objects, each with: artist (string), album (string), "
+            "Return a JSON array of 5 objects, each with: artist (string), album (string), "
             "year (integer), rank (\"primary\" for first, \"secondary\" for others).\n"
             "No explanation, just the JSON array."
         )
