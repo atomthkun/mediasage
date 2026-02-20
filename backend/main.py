@@ -5,11 +5,11 @@ import json
 import logging
 import os
 import random
+import re
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-
-import re
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +20,7 @@ import httpx
 from backend.config import get_config, update_config_values, ConfigSaveError
 from backend.version import get_version
 from backend.models import (
+    AlbumCandidate,
     AlbumPreviewResponse,
     AnalyzePromptFiltersRequest,
     AnalyzePromptFiltersResponse,
@@ -28,14 +29,17 @@ from backend.models import (
     AnalyzeTrackRequest,
     AnalyzeTrackResponse,
     ConfigResponse,
+    DecadeCount,
     FilterPreviewRequest,
     FilterPreviewResponse,
     GenerateRequest,
+    GenreCount,
     HealthResponse,
     LibraryCacheStatusResponse,
     LibraryStatsResponse,
-    GenreCount,
-    DecadeCount,
+    OllamaModelInfo,
+    OllamaModelsResponse,
+    OllamaStatus,
     PlexClientInfo,
     PlexPlaylistInfo,
     PlayQueueRequest,
@@ -44,34 +48,36 @@ from backend.models import (
     RecommendGenerateResponse,
     RecommendQuestionsRequest,
     RecommendQuestionsResponse,
+    RecommendSessionState,
     RecommendSwitchModeRequest,
     RecommendSwitchModeResponse,
     ResultDetail,
     ResultListItem,
     ResultListResponse,
     SavePlaylistRequest,
-    UpdatePlaylistRequest,
-    UpdatePlaylistResponse,
     SavePlaylistResponse,
     SyncProgress,
     SyncTriggerResponse,
     Track,
     UpdateConfigRequest,
+    UpdatePlaylistRequest,
+    UpdatePlaylistResponse,
+    album_key,
 )
 from backend.plex_client import get_plex_client, init_plex_client
 from backend import library_cache
 from backend.llm_client import (
-    get_llm_client,
-    init_llm_client,
-    get_max_tracks_for_model,
-    get_max_albums_for_model,
-    get_model_cost,
+    TOKENS_PER_ALBUM,
     estimate_cost_for_model,
-    list_ollama_models,
+    get_llm_client,
+    get_max_albums_for_model,
+    get_max_tracks_for_model,
+    get_model_cost,
     get_ollama_model_info,
     get_ollama_status,
+    init_llm_client,
+    list_ollama_models,
 )
-from backend.models import OllamaModelsResponse, OllamaModelInfo, OllamaStatus
 from backend.analyzer import analyze_prompt as do_analyze_prompt, analyze_track as do_analyze_track
 from backend.generator import generate_playlist_stream
 
@@ -697,13 +703,31 @@ def _get_research_client():
     return _music_research_client
 
 
-def _apply_year_override(rec, rd, log):
+async def _get_art_proxy_client() -> httpx.AsyncClient:
+    """Get or create the shared httpx client for art proxying."""
+    global _art_proxy_client
+    if _art_proxy_client is None or _art_proxy_client.is_closed:
+        async with _art_proxy_lock:
+            if _art_proxy_client is None or _art_proxy_client.is_closed:
+                _art_proxy_client = httpx.AsyncClient(timeout=10.0)
+    return _art_proxy_client
+
+
+async def _set_cover_art_from_research(rec, rd, research_client) -> None:
+    """Fetch cover art from Cover Art Archive when rec has no art_url."""
+    if not rec.art_url and rd.earliest_release_mbid:
+        art_url = await research_client.fetch_cover_art(rd.earliest_release_mbid)
+        if art_url:
+            rec.art_url = f"/api/external-art?url={quote(art_url, safe='')}"
+
+
+def _apply_year_override(rec, rd):
     """Override rec.year with MusicBrainz release_date year when available."""
     if rd.release_date and len(rd.release_date) >= 4:
         try:
             mb_year = int(rd.release_date[:4])
             if rec.year != mb_year:
-                log.info(
+                logger.info(
                     "Year override: Plex=%s → MusicBrainz=%s for %s — %s",
                     rec.year, mb_year, rec.artist, rec.album,
                 )
@@ -719,8 +743,6 @@ async def recommend_albums_preview(
     max_albums: int = Query(2500, description="Max albums to send to AI"),
 ) -> AlbumPreviewResponse:
     """Preview filtered album counts and cost estimates for recommendation."""
-    from backend.llm_client import TOKENS_PER_ALBUM, estimate_cost_for_model
-
     genre_list = [g.strip() for g in genres.split(",") if g.strip()] if genres else None
     decade_list = [d.strip() for d in decades.split(",") if d.strip()] if decades else None
 
@@ -809,8 +831,6 @@ async def recommend_questions(request: RecommendQuestionsRequest) -> RecommendQu
     if not pipeline:
         raise HTTPException(status_code=503, detail="LLM not configured")
 
-    from backend.models import RecommendSessionState
-
     try:
         # Run gap analysis + question generation (only needs the prompt)
         dimension_ids = await asyncio.to_thread(
@@ -856,8 +876,6 @@ async def recommend_switch_mode(request: RecommendSwitchModeRequest) -> Recommen
     if request.mode == old_session.mode:
         return RecommendSwitchModeResponse(session_id=request.session_id)
 
-    from backend.models import RecommendSessionState
-
     # Create new session with empty candidates — generate will load them
     new_session = RecommendSessionState(
         mode=request.mode,
@@ -894,8 +912,6 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
     )
 
     # Load album candidates and build state before locked session update
-    from backend.models import AlbumCandidate
-
     genre_list = request.genres if request.genres else None
     decade_list = request.decades if request.decades else None
     loaded_candidates = None
@@ -963,7 +979,6 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
     async def event_stream():
         research_warning = None
         research_data = {}
-        cost_logger = logging.getLogger("recommend.cost")
 
         try:
             is_discovery = request.mode == "discovery"
@@ -1028,9 +1043,9 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 try:
                     rd = await research_client.research_album(primary.artist, primary.album, full=True, year=primary.year)
                     if rd.musicbrainz_id:
-                        research_data[f"{primary.artist}|||{primary.album}"] = rd
+                        research_data[album_key(primary.artist, primary.album, lower=False)] = rd
                         primary.research_available = True
-                        _apply_year_override(primary, rd, logger)
+                        _apply_year_override(primary, rd)
 
                         # Discovery mode: validate against research
                         if is_discovery:
@@ -1042,12 +1057,7 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                                 logger.info("Primary discovery album failed validation")
                                 research_warning = "The primary recommendation could not be fully verified against available sources."
 
-                        # Fetch cover art when missing (discovery mode or failed candidate lookup)
-                        if not primary.art_url and rd.earliest_release_mbid:
-                            art_url = await research_client.fetch_cover_art(rd.earliest_release_mbid)
-                            if art_url:
-                                from urllib.parse import quote
-                                primary.art_url = f"/api/external-art?url={quote(art_url, safe='')}"
+                        await _set_cover_art_from_research(primary, rd, research_client)
                     elif is_discovery:
                         # MusicBrainz couldn't verify this album exists
                         logger.warning("Discovery album not found in MusicBrainz: %s — %s", primary.artist, primary.album)
@@ -1064,22 +1074,17 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                 try:
                     rd = await research_client.research_album(sec.artist, sec.album, full=False, year=sec.year)
                     if rd.musicbrainz_id:
-                        research_data[f"{sec.artist}|||{sec.album}"] = rd
+                        research_data[album_key(sec.artist, sec.album, lower=False)] = rd
                         sec.research_available = True
-                        _apply_year_override(sec, rd, logger)
+                        _apply_year_override(sec, rd)
 
-                        # Fetch cover art when missing (discovery mode or failed candidate lookup)
-                        if not sec.art_url and rd.earliest_release_mbid:
-                            art_url = await research_client.fetch_cover_art(rd.earliest_release_mbid)
-                            if art_url:
-                                from urllib.parse import quote
-                                sec.art_url = f"/api/external-art?url={quote(art_url, safe='')}"
+                        await _set_cover_art_from_research(sec, rd, research_client)
                 except Exception as e:
                     logger.warning("Secondary research failed for %s: %s", sec.album, e)
 
             # Step 3.5: Extract facts from research (primary album only)
             extracted_facts = {}
-            primary_key = f"{primary.artist}|||{primary.album}" if primary else None
+            primary_key = album_key(primary.artist, primary.album, lower=False) if primary else None
 
             if primary_key and primary_key in research_data:
                 yield f"event: progress\ndata: {json.dumps({'step': 'extracting_facts', 'message': 'Analyzing research sources...'})}\n\n"
@@ -1131,15 +1136,8 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
                         )
                         yield f"event: progress\ndata: {json.dumps({'step': 'rewriting', 'message': 'Refining the pitch...'})}\n\n"
 
-                        # Build answers string for rewrite
-                        answer_parts = []
-                        for i, ans in enumerate(_answers):
-                            if ans:
-                                text = ans
-                                if i < len(_answer_texts) and _answer_texts[i]:
-                                    text += f" ({_answer_texts[i]})"
-                                answer_parts.append(text)
-                        answers_str = "; ".join(answer_parts) if answer_parts else "no specific preferences"
+                        from backend.recommender import format_answers_for_pitch
+                        answers_str = format_answers_for_pitch(_answers, _answer_texts)
 
                         await asyncio.to_thread(
                             pipeline.rewrite_pitch,
@@ -1222,13 +1220,13 @@ async def recommend_generate(request: RecommendGenerateRequest) -> StreamingResp
             # Record shown albums so "Show me another" won't repeat them.
             # Keep only the last 30 (10 rounds) so older picks rotate back in.
             new_keys = [
-                f"{rec.artist.lower()}|||{rec.album.lower()}"
+                album_key(rec.artist, rec.album)
                 for rec in recommendations
             ]
             pipeline.update_previously_recommended(request.session_id, new_keys)
 
             # Log cost summary
-            cost_logger.info(
+            logger.info(
                 "recommend.cost_summary | session=%s albums_researched=%d facts_extracted=%d research_warning=%s",
                 request.session_id,
                 len(research_data),
@@ -1319,22 +1317,13 @@ async def get_album_art(rating_key: str):
     if not plex_client or not plex_client.is_connected():
         raise HTTPException(status_code=503, detail="Plex not connected")
 
-    # Get track to find thumb URL
-    track = await asyncio.to_thread(plex_client.get_track_by_key, rating_key)
-    if not track:
-        raise HTTPException(status_code=404, detail="Track not found")
-
     # Get raw thumb path from Plex
     thumb_path = await asyncio.to_thread(plex_client.get_thumb_path, rating_key)
     if thumb_path:
         try:
-            global _art_proxy_client
-            if _art_proxy_client is None or _art_proxy_client.is_closed:
-                async with _art_proxy_lock:
-                    if _art_proxy_client is None or _art_proxy_client.is_closed:
-                        _art_proxy_client = httpx.AsyncClient(timeout=10.0)
+            client = await _get_art_proxy_client()
             thumb_url = f"{config.plex.url}{thumb_path}"
-            response = await _art_proxy_client.get(
+            response = await client.get(
                 thumb_url,
                 headers={"X-Plex-Token": config.plex.token},
             )
@@ -1356,9 +1345,9 @@ _EXTERNAL_ART_DOMAINS = {"coverartarchive.org", "archive.org", "ia600.us.archive
 @app.get("/api/external-art")
 async def get_external_art(url: str = Query(...)):
     """Proxy external album art (e.g., Cover Art Archive) to avoid direct hotlinking."""
-    from urllib.parse import urlparse as _urlparse
+    from urllib.parse import urlparse
 
-    parsed = _urlparse(url)
+    parsed = urlparse(url)
     # Only allow HTTPS from known art CDN domains
     if parsed.scheme != "https":
         raise HTTPException(status_code=400, detail="Only HTTPS URLs allowed")
@@ -1367,12 +1356,8 @@ async def get_external_art(url: str = Query(...)):
         raise HTTPException(status_code=400, detail="Domain not allowed")
 
     try:
-        global _art_proxy_client
-        if _art_proxy_client is None or _art_proxy_client.is_closed:
-            async with _art_proxy_lock:
-                if _art_proxy_client is None or _art_proxy_client.is_closed:
-                    _art_proxy_client = httpx.AsyncClient(timeout=10.0)
-        response = await _art_proxy_client.get(url, follow_redirects=True)
+        client = await _get_art_proxy_client()
+        response = await client.get(url, follow_redirects=True)
         if response.status_code == 200:
             return Response(
                 content=response.content,

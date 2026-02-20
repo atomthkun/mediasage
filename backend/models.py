@@ -5,6 +5,13 @@ from typing import Literal
 from pydantic import BaseModel, field_validator, model_validator
 
 
+def album_key(artist: str, album: str, lower: bool = True) -> str:
+    """Build composite key for artist+album lookups."""
+    if lower:
+        return f"{artist.lower()}|||{album.lower()}"
+    return f"{artist}|||{album}"
+
+
 # =============================================================================
 # Core Entities
 # =============================================================================
@@ -598,6 +605,25 @@ class ExtractedFacts(BaseModel):
     common_misconceptions: str = ""
     source_coverage: str = ""
     track_listing: list[str] = []  # Authoritative list from MusicBrainz, not LLM-extracted
+
+    def to_text(self, include_track_listing: bool = True) -> str:
+        """Format facts as labeled text block for LLM prompts."""
+        parts = []
+        for label, value in [
+            ("Origin", self.origin_story),
+            ("Personnel", ", ".join(self.personnel) if self.personnel else ""),
+            ("Musical style", self.musical_style),
+            ("Vocal approach", self.vocal_approach),
+            ("Cultural context", self.cultural_context),
+            ("Track highlights", self.track_highlights),
+            ("Common misconceptions", self.common_misconceptions),
+            ("Source coverage", self.source_coverage),
+        ]:
+            if value:
+                parts.append(f"- {label}: {value}")
+        if include_track_listing and self.track_listing:
+            parts.append("- Track listing: " + ", ".join(self.track_listing))
+        return "\n".join(parts)
 
 
 class PitchIssue(BaseModel):

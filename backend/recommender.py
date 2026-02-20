@@ -11,6 +11,8 @@ import time
 import uuid
 from typing import Any
 
+from rapidfuzz import fuzz
+
 from backend.llm_client import LLMClient, LLMResponse
 from backend.models import (
     AlbumCandidate,
@@ -23,7 +25,9 @@ from backend.models import (
     ResearchData,
     SommelierPitch,
     TasteProfile,
+    album_key,
 )
+from backend.plex_client import simplify_string
 
 logger = logging.getLogger(__name__)
 cost_logger = logging.getLogger("recommend.cost")
@@ -47,6 +51,72 @@ DIMENSION_LIBRARY = [
 # Session expiry in seconds (30 minutes)
 SESSION_EXPIRY = 1800
 MAX_SESSIONS = 100
+
+# ── Familiarity directives ─────────────────────────────────────────────────
+
+FAMILIARITY_SELECTION_DIRECTIVES = {
+    "comfort": (
+        "\n\nFAMILIARITY PREFERENCE: The user wants comfort picks. "
+        "Strongly prefer albums marked {well-loved}. Avoid {unplayed} albums."
+    ),
+    "rediscover": (
+        "\n\nFAMILIARITY PREFERENCE: The user wants to rediscover forgotten albums. "
+        "Strongly prefer albums marked {light}, especially those not played recently. "
+        "Avoid {unplayed} albums."
+    ),
+    "hidden_gems": (
+        "\n\nFAMILIARITY PREFERENCE: The user wants hidden gems they haven't explored. "
+        "Strongly prefer albums marked {unplayed}. Avoid {well-loved} albums."
+    ),
+}
+
+FAMILIARITY_PITCH_GUIDANCE = {
+    "comfort": (
+        "\n\nFamiliarity framing: The user wants comfort picks — albums they already love. "
+        "Frame pitches as celebrating a favorite: remind them why they love it, "
+        "suggest a fresh angle to appreciate it anew.\n"
+    ),
+    "rediscover": (
+        "\n\nFamiliarity framing: The user wants to rediscover forgotten albums. "
+        "Frame pitches as 'when's the last time you sat down with this?' — "
+        "highlight what they'll notice on a return visit.\n"
+    ),
+    "hidden_gems": (
+        "\n\nFamiliarity framing: The user wants hidden gems they haven't explored. "
+        "Frame pitches as exciting discovery: 'you haven't given this a real shot yet' — "
+        "emphasize what makes it worth a dedicated listen.\n"
+    ),
+}
+
+
+def format_answers_for_selection(
+    answers: list[str | None], answer_texts: list[str]
+) -> str:
+    """Format answers with Q-labels for album selection prompts."""
+    parts = []
+    for i, ans in enumerate(answers):
+        if ans:
+            text = ans
+            if i < len(answer_texts) and answer_texts[i]:
+                text += f" (also: {answer_texts[i]})"
+            parts.append(f"Q{i+1} answer: {text}")
+        else:
+            parts.append(f"Q{i+1}: skipped")
+    return "\n".join(parts)
+
+
+def format_answers_for_pitch(
+    answers: list[str | None], answer_texts: list[str]
+) -> str:
+    """Format answers as compact semicolon-joined string for pitch prompts."""
+    parts = []
+    for i, ans in enumerate(answers):
+        if ans:
+            text = ans
+            if i < len(answer_texts) and answer_texts[i]:
+                text += f" ({answer_texts[i]})"
+            parts.append(text)
+    return "; ".join(parts) if parts else "no specific preferences"
 
 
 class RecommendationPipeline:
@@ -442,7 +512,7 @@ class RecommendationPipeline:
             excluded = set(previously_recommended)
             album_candidates = [
                 c for c in album_candidates
-                if f"{c.album_artist.lower()}|||{c.album.lower()}" not in excluded
+                if album_key(c.album_artist, c.album) not in excluded
             ]
 
         # Edge case: very small pool — return all candidates directly
@@ -472,34 +542,8 @@ class RecommendationPipeline:
         album_text = "\n".join(album_lines)
 
         # Build answer context
-        answer_parts = []
-        for i, ans in enumerate(answers):
-            if ans:
-                text = ans
-                if i < len(answer_texts) and answer_texts[i]:
-                    text += f" (also: {answer_texts[i]})"
-                answer_parts.append(f"Q{i+1} answer: {text}")
-            else:
-                answer_parts.append(f"Q{i+1}: skipped")
-        answers_text = "\n".join(answer_parts)
-
-        familiarity_directive = ""
-        if familiarity_pref == "comfort":
-            familiarity_directive = (
-                "\n\nFAMILIARITY PREFERENCE: The user wants comfort picks. "
-                "Strongly prefer albums marked {well-loved}. Avoid {unplayed} albums."
-            )
-        elif familiarity_pref == "rediscover":
-            familiarity_directive = (
-                "\n\nFAMILIARITY PREFERENCE: The user wants to rediscover forgotten albums. "
-                "Strongly prefer albums marked {light}, especially those not played recently. "
-                "Avoid {unplayed} albums."
-            )
-        elif familiarity_pref == "hidden_gems":
-            familiarity_directive = (
-                "\n\nFAMILIARITY PREFERENCE: The user wants hidden gems they haven't explored. "
-                "Strongly prefer albums marked {unplayed}. Avoid {well-loved} albums."
-            )
+        answers_text = format_answers_for_selection(answers, answer_texts)
+        familiarity_directive = FAMILIARITY_SELECTION_DIRECTIVES.get(familiarity_pref, "")
 
         system = (
             "You are a music recommendation expert. Pick exactly 3 albums from the provided list "
@@ -533,8 +577,7 @@ class RecommendationPipeline:
         # Build lookup for matching
         candidate_lookup: dict[str, AlbumCandidate] = {}
         for c in album_candidates:
-            key = f"{c.album_artist.lower()}|||{c.album.lower()}"
-            candidate_lookup[key] = c
+            candidate_lookup[album_key(c.album_artist, c.album)] = c
 
         for item in raw[:3]:
             artist = item.get("artist", "")
@@ -542,8 +585,7 @@ class RecommendationPipeline:
             rank = item.get("rank", "secondary")
 
             # Match back to candidate (case-insensitive)
-            lookup_key = f"{artist.lower()}|||{album.lower()}"
-            candidate = candidate_lookup.get(lookup_key)
+            candidate = candidate_lookup.get(album_key(artist, album))
 
             # Fallback: substring match handles LLM dropping suffixes like "(Reissue)"
             if candidate is None:
@@ -559,8 +601,6 @@ class RecommendationPipeline:
 
             # Fallback: fuzzy match for slight name variations
             if candidate is None:
-                from rapidfuzz import fuzz
-                from backend.plex_client import simplify_string
                 best_score = 0
                 best_candidate = None
                 simplified_artist = simplify_string(artist)
@@ -636,29 +676,15 @@ class RecommendationPipeline:
                 desc += f"\nFamiliarity: {level}"
 
             # Add extracted facts if available (preferred over raw research)
-            facts_key = f"{rec.artist}|||{rec.album}"
+            facts_key = album_key(rec.artist, rec.album, lower=False)
             if extracted_facts and facts_key in extracted_facts:
                 ef = extracted_facts[facts_key]
-                desc += "\n\nEXTRACTED FACTS (from Wikipedia, MusicBrainz, and reviews):"
-                if ef.origin_story:
-                    desc += f"\n- Origin: {ef.origin_story}"
-                if ef.personnel:
-                    desc += f"\n- Personnel: {', '.join(ef.personnel)}"
-                if ef.musical_style:
-                    desc += f"\n- Musical style: {ef.musical_style}"
-                if ef.vocal_approach:
-                    desc += f"\n- Vocal approach: {ef.vocal_approach}"
-                if ef.cultural_context:
-                    desc += f"\n- Cultural context: {ef.cultural_context}"
-                if ef.track_highlights:
-                    desc += f"\n- Track highlights: {ef.track_highlights}"
-                if ef.common_misconceptions:
-                    desc += f"\n- Common misconceptions: {ef.common_misconceptions}"
-                if ef.source_coverage:
-                    desc += f"\n- Source coverage: {ef.source_coverage}"
+                facts_text = ef.to_text(include_track_listing=False)
+                if facts_text:
+                    desc += f"\n\nEXTRACTED FACTS (from Wikipedia, MusicBrainz, and reviews):\n{facts_text}"
 
             # Add track listing from research if available
-            research_key = f"{rec.artist}|||{rec.album}"
+            research_key = album_key(rec.artist, rec.album, lower=False)
             if research and research_key in research:
                 rd = research[research_key]
                 if rd.track_listing:
@@ -673,34 +699,8 @@ class RecommendationPipeline:
         albums_text = "\n\n".join(album_descs)
 
         # Build answer context
-        answer_parts = []
-        for i, ans in enumerate(answers):
-            if ans:
-                text = ans
-                if i < len(answer_texts) and answer_texts[i]:
-                    text += f" ({answer_texts[i]})"
-                answer_parts.append(text)
-        answers_str = "; ".join(answer_parts) if answer_parts else "no specific preferences"
-
-        familiarity_guidance = ""
-        if familiarity_pref == "comfort":
-            familiarity_guidance = (
-                "\n\nFamiliarity framing: The user wants comfort picks — albums they already love. "
-                "Frame pitches as celebrating a favorite: remind them why they love it, "
-                "suggest a fresh angle to appreciate it anew.\n"
-            )
-        elif familiarity_pref == "rediscover":
-            familiarity_guidance = (
-                "\n\nFamiliarity framing: The user wants to rediscover forgotten albums. "
-                "Frame pitches as 'when's the last time you sat down with this?' — "
-                "highlight what they'll notice on a return visit.\n"
-            )
-        elif familiarity_pref == "hidden_gems":
-            familiarity_guidance = (
-                "\n\nFamiliarity framing: The user wants hidden gems they haven't explored. "
-                "Frame pitches as exciting discovery: 'you haven't given this a real shot yet' — "
-                "emphasize what makes it worth a dedicated listen.\n"
-            )
+        answers_str = format_answers_for_pitch(answers, answer_texts)
+        familiarity_guidance = FAMILIARITY_PITCH_GUIDANCE.get(familiarity_pref, "")
 
         grounding_rules = ""
         if extracted_facts:
@@ -752,17 +752,14 @@ class RecommendationPipeline:
         # Match pitches back to recommendations
         pitch_lookup = {}
         for item in raw:
-            key = f"{item.get('artist', '').lower()}|||{item.get('album', '').lower()}"
-            pitch_lookup[key] = item
+            pitch_lookup[album_key(item.get("artist", ""), item.get("album", ""))] = item
 
         for rec in recommendations:
-            key = f"{rec.artist.lower()}|||{rec.album.lower()}"
-            item = pitch_lookup.get(key)
+            item = pitch_lookup.get(album_key(rec.artist, rec.album))
 
             # Fallback: LLMs often drop parenthetical suffixes like "(Reissue)"
             # so try fuzzy matching on album name when artist matches well
             if item is None:
-                from rapidfuzz import fuzz
                 rec_artist_l = rec.artist.lower()
                 rec_album_l = rec.album.lower()
                 best_score = 0
@@ -803,7 +800,7 @@ class RecommendationPipeline:
                 )
 
             # Mark research availability
-            if research and f"{rec.artist}|||{rec.album}" in research:
+            if research and album_key(rec.artist, rec.album, lower=False) in research:
                 rec.research_available = True
 
         return recommendations
@@ -820,24 +817,10 @@ class RecommendationPipeline:
 
         Returns PitchValidation with any issues found.
         """
-        facts_text = ""
-        if facts.origin_story:
-            facts_text += f"- Origin: {facts.origin_story}\n"
-        if facts.personnel:
-            facts_text += f"- Personnel: {', '.join(facts.personnel)}\n"
-        if facts.musical_style:
-            facts_text += f"- Musical style: {facts.musical_style}\n"
-        if facts.vocal_approach:
-            facts_text += f"- Vocal approach: {facts.vocal_approach}\n"
-        if facts.cultural_context:
-            facts_text += f"- Cultural context: {facts.cultural_context}\n"
-        if facts.track_highlights:
-            facts_text += f"- Track highlights: {facts.track_highlights}\n"
-        if facts.common_misconceptions:
-            facts_text += f"- Common misconceptions: {facts.common_misconceptions}\n"
+        facts_text = facts.to_text(include_track_listing=False)
         if facts.track_listing:
-            facts_text += "\nAUTHORITATIVE TRACK LISTING:\n"
-            facts_text += "\n".join(f"  - {t}" for t in facts.track_listing) + "\n"
+            facts_text += "\n\nAUTHORITATIVE TRACK LISTING:\n"
+            facts_text += "\n".join(f"  - {t}" for t in facts.track_listing)
 
         system = (
             "You are a fact-checker reviewing an album recommendation pitch against "
@@ -904,24 +887,7 @@ class RecommendationPipeline:
             )
         corrections_text = "\n".join(corrections)
 
-        # Build facts block
-        facts_parts = []
-        for field_name, field_val in [
-            ("Origin", facts.origin_story),
-            ("Personnel", ", ".join(facts.personnel) if facts.personnel else ""),
-            ("Musical style", facts.musical_style),
-            ("Vocal approach", facts.vocal_approach),
-            ("Cultural context", facts.cultural_context),
-            ("Track highlights", facts.track_highlights),
-            ("Common misconceptions", facts.common_misconceptions),
-        ]:
-            if field_val:
-                facts_parts.append(f"- {field_name}: {field_val}")
-        if facts.track_listing:
-            facts_parts.append(
-                "- Track listing: " + ", ".join(facts.track_listing)
-            )
-        facts_text = "\n".join(facts_parts)
+        facts_text = facts.to_text()
 
         system = (
             "You are a passionate music sommelier. Rewrite this album pitch, fixing the "
@@ -1028,16 +994,7 @@ class RecommendationPipeline:
         )
 
         # Build answer context
-        answer_parts = []
-        for i, ans in enumerate(answers):
-            if ans:
-                text = ans
-                if i < len(answer_texts) and answer_texts[i]:
-                    text += f" (also: {answer_texts[i]})"
-                answer_parts.append(f"Q{i+1} answer: {text}")
-            else:
-                answer_parts.append(f"Q{i+1}: skipped")
-        answers_text = "\n".join(answer_parts)
+        answers_text = format_answers_for_selection(answers, answer_texts)
 
         system = (
             "You are a music recommendation expert with encyclopedic knowledge. "
@@ -1079,7 +1036,7 @@ class RecommendationPipeline:
         # Build a set of owned albums for post-filtering (catches what the
         # prompt-level sample of 200 misses in large libraries)
         owned_set = {
-            f"{a['artist'].lower()}|||{a['album'].lower()}"
+            album_key(a["artist"], a["album"])
             for a in taste_profile.owned_albums
         }
 
@@ -1087,7 +1044,7 @@ class RecommendationPipeline:
             if len(recommendations) >= 3:
                 break
             # Skip albums the user already owns
-            rec_key = f"{item.get('artist', '').lower()}|||{item.get('album', '').lower()}"
+            rec_key = album_key(item.get("artist", ""), item.get("album", ""))
             if rec_key in owned_set:
                 logger.info(
                     "Discovery post-filter: skipping owned album %s — %s",
