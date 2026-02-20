@@ -31,7 +31,11 @@ COVER_ART_BASE = "https://coverartarchive.org"
 
 
 def _is_safe_url(url: str) -> bool:
-    """Validate that a URL is safe to fetch (not a private/internal address)."""
+    """Validate that a URL is safe to fetch (not a private/internal address).
+
+    NOTE: Subject to DNS rebinding (TOCTOU between resolution and fetch).
+    Acceptable here because URLs come from MusicBrainz relations, not user input.
+    """
     try:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
@@ -39,10 +43,10 @@ def _is_safe_url(url: str) -> bool:
         hostname = parsed.hostname
         if not hostname:
             return False
-        # Resolve hostname to check for private IPs
         for info in socket.getaddrinfo(hostname, None, socket.AF_UNSPEC):
             addr = info[4][0]
-            if ipaddress.ip_address(addr).is_private:
+            ip = ipaddress.ip_address(addr)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
                 return False
         return True
     except (ValueError, socket.gaierror):
@@ -71,11 +75,11 @@ class MusicResearchClient:
     async def _rate_limit(self) -> None:
         """Enforce MusicBrainz rate limiting (1 req/sec)."""
         async with self._rate_lock:
-            now = time.time()
+            now = time.monotonic()
             elapsed = now - self._last_mb_request
             if elapsed < MB_RATE_LIMIT:
                 await asyncio.sleep(MB_RATE_LIMIT - elapsed)
-            self._last_mb_request = time.time()
+            self._last_mb_request = time.monotonic()
 
     @staticmethod
     def _clean_album_name(album: str) -> str | None:
@@ -430,7 +434,16 @@ class MusicResearchClient:
         client = await self._get_client()
 
         try:
-            resp = await client.get(url, follow_redirects=True)
+            # Manually follow redirects so we can re-validate each target
+            resp = await client.get(url, follow_redirects=False)
+            redirects_followed = 0
+            while resp.is_redirect and redirects_followed < 5:
+                redirect_url = str(resp.next_request.url) if resp.next_request else None
+                if not redirect_url or not _is_safe_url(redirect_url):
+                    logger.warning("Rejecting unsafe redirect: %s", redirect_url)
+                    return None
+                resp = await client.get(redirect_url, follow_redirects=False)
+                redirects_followed += 1
             resp.raise_for_status()
 
             doc = ReadableDocument(resp.text)

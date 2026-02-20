@@ -124,6 +124,7 @@ class TestMusicResearchReviews:
         client = MusicResearchClient()
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.is_redirect = False
         mock_response.raise_for_status = MagicMock()
         mock_response.text = """
         <html><head><title>Album Review</title></head>
@@ -182,6 +183,7 @@ class TestMusicResearchReviews:
         long_text = "<html><body><article>" + ("x" * 5000) + "</article></body></html>"
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.is_redirect = False
         mock_response.raise_for_status = MagicMock()
         mock_response.text = long_text
 
