@@ -3022,6 +3022,7 @@ body.no-scroll {
 .rec-secondary-results {
     margin-top: 56px;
     padding-top: 32px;
+    padding-bottom: var(--spacing-xl);
     border-top: 1px solid var(--border);
 }
 
@@ -3141,16 +3142,6 @@ body.no-scroll {
 .rec-discovery-link:hover {
     border-color: var(--accent);
     color: var(--accent);
-}
-
-/* Cost Footer */
-.rec-cost-footer {
-    margin-top: var(--spacing-lg);
-    padding-top: var(--spacing-md);
-    border-top: 1px solid var(--border);
-    font-size: var(--font-size-sm);
-    color: var(--text-muted);
-    text-align: right;
 }
 
 /* Research Warning */

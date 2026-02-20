@@ -223,7 +223,8 @@ async function apiCall(endpoint, options = {}) {
 
     if (!response.ok) {
         const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(error.detail || error.error || 'Request failed');
+        const detail = Array.isArray(error.detail) ? error.detail.map(e => e.msg).join('; ') : error.detail;
+        throw new Error(detail || error.error || 'Request failed');
     }
 
     return response.json();
@@ -4745,21 +4746,21 @@ function renderRecResults() {
         }).join('');
     }
 
-    // Discovery bridge (show in library mode only)
+    // Discovery bridge (show in library mode with active session only)
     const bridgeEl = document.getElementById('rec-discovery-bridge');
     if (bridgeEl) {
-        bridgeEl.classList.toggle('hidden', state.rec.mode !== 'library');
+        bridgeEl.classList.toggle('hidden', state.rec.mode !== 'library' || !state.rec.sessionId);
     }
 
-    // Cost footer
-    const costFooter = document.getElementById('rec-cost-footer');
-    if (costFooter) {
+    // Update cost display in shared app footer
+    const costDisplay = document.getElementById('cost-display');
+    if (costDisplay) {
         if (state.rec.estimatedCost > 0) {
-            costFooter.textContent = `${state.rec.tokenCount.toLocaleString()} tokens · $${state.rec.estimatedCost.toFixed(4)}`;
+            costDisplay.textContent = `${state.rec.tokenCount.toLocaleString()} tokens ($${state.rec.estimatedCost.toFixed(4)})`;
         } else if (state.rec.tokenCount > 0) {
-            costFooter.textContent = `${state.rec.tokenCount.toLocaleString()} tokens · Free (local)`;
+            costDisplay.textContent = `${state.rec.tokenCount.toLocaleString()} tokens`;
         } else {
-            costFooter.textContent = '';
+            costDisplay.textContent = '';
         }
     }
 }
