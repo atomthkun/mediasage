@@ -156,6 +156,13 @@ const state = {
         loading: false,
         filterAnalysisPromise: null,
     },
+
+    // Setup wizard
+    setup: {
+        active: false,
+        status: null,
+        syncPollInterval: null,
+    },
 };
 
 // =============================================================================
@@ -255,6 +262,37 @@ async function fetchOllamaModels(url) {
 
 async function fetchOllamaModelInfo(url, modelName) {
     return apiCall(`/ollama/model-info?url=${encodeURIComponent(url)}&model=${encodeURIComponent(modelName)}`);
+}
+
+// =============================================================================
+// Setup Wizard API Calls
+// =============================================================================
+
+async function fetchSetupStatus() {
+    return apiCall('/setup/status');
+}
+
+async function validatePlex(url, token, library) {
+    return apiCall('/setup/validate-plex', {
+        method: 'POST',
+        body: JSON.stringify({ plex_url: url, plex_token: token, music_library: library }),
+    });
+}
+
+async function validateAI(provider, apiKey, ollamaUrl, customUrl) {
+    return apiCall('/setup/validate-ai', {
+        method: 'POST',
+        body: JSON.stringify({
+            provider,
+            api_key: apiKey || '',
+            ollama_url: ollamaUrl || '',
+            custom_url: customUrl || '',
+        }),
+    });
+}
+
+async function completeSetup() {
+    return apiCall('/setup/complete', { method: 'POST' });
 }
 
 async function analyzePrompt(prompt) {
@@ -528,6 +566,8 @@ function modeFromHash() {
 }
 
 function navigateTo(view, mode) {
+    // During setup wizard, only allow navigation to settings
+    if (state.setup.active && view !== 'settings' && view !== 'home') return;
     const viewChanged = state.view !== view;
     const modeChanged = mode && state.mode !== mode;
     if (!viewChanged && !modeChanged) return;
@@ -745,8 +785,10 @@ function renderHistoryFeedFromCache() {
             const groupHasVisible = items.some(
                 i => dateGroupLabel(i.created_at) === group && passesHistoryFilter(i)
             );
-            const headerDisplay = groupHasVisible ? '' : ' style="display:none"';
-            html += `<div class="date-group-header"${headerDisplay} style="animation-delay:${idx * 30}ms">${escapeHtml(group)}</div>`;
+            const headerStyle = groupHasVisible
+                ? `animation-delay:${idx * 30}ms`
+                : `display:none;animation-delay:${idx * 30}ms`;
+            html += `<div class="date-group-header" style="${headerStyle}">${escapeHtml(group)}</div>`;
             lastGroup = group;
         }
 
@@ -878,14 +920,16 @@ function finalizeHistoryDelete(resultId) {
         .then(resp => {
             if (!resp.ok && resp.status !== 404) {
                 showError('Failed to delete item');
-                _historyCache.items = null; // Force reload on next render
-                loadHistoryFeed();
+                _historyCache.stale = true;
+                _historyCache.items = [];
+                renderHistoryFeed();
             }
         })
         .catch(() => {
             showError('Failed to delete item');
-            _historyCache.items = null;
-            loadHistoryFeed();
+            _historyCache.stale = true;
+            _historyCache.items = [];
+            renderHistoryFeed();
         });
 }
 
@@ -4995,6 +5039,334 @@ async function handleRecSaveToPlaylist(album, artist, ratingKeys, pitch) {
 }
 
 // =============================================================================
+// Setup Wizard
+// =============================================================================
+
+const SETUP_AI_HINTS = {
+    gemini: 'Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>',
+    anthropic: 'Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>',
+    openai: 'Get a key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>',
+    ollama: 'Make sure Ollama is running on your network',
+    custom: 'Any OpenAI-compatible API endpoint',
+};
+
+function enterSetupWizard(status) {
+    state.setup.active = true;
+    state.setup.status = status;
+    const wizard = document.getElementById('setup-wizard');
+    const homeContent = document.querySelector('#home-view .home-content');
+    wizard.classList.remove('hidden');
+    if (homeContent) homeContent.classList.add('hidden');
+    renderSetupState(status);
+    setupWizardEventListeners();
+}
+
+function exitSetupWizard() {
+    state.setup.active = false;
+    if (state.setup.syncPollInterval) {
+        clearInterval(state.setup.syncPollInterval);
+        state.setup.syncPollInterval = null;
+    }
+    const wizard = document.getElementById('setup-wizard');
+    const homeContent = document.querySelector('#home-view .home-content');
+    wizard.classList.add('hidden');
+    if (homeContent) homeContent.classList.remove('hidden');
+
+    // Run normal init
+    loadSettings().then(() => {
+        if (state.config?.plex_connected) checkLibraryStatus();
+    }).catch(() => {});
+    renderHistoryFeed();
+}
+
+function renderSetupState(status) {
+    // Data dir warning
+    const dataWarning = document.getElementById('setup-data-warning');
+    if (!status.data_dir_writable) {
+        dataWarning.classList.remove('hidden');
+        document.getElementById('setup-data-fix').textContent =
+            `Run: sudo chown ${status.process_uid}:${status.process_gid} ${status.data_dir}`;
+    } else {
+        dataWarning.classList.add('hidden');
+    }
+
+    // Step 1: Plex
+    if (status.plex_connected) {
+        setStepDone('plex', `Connected to Plex (${status.music_libraries.length} music ${status.music_libraries.length === 1 ? 'library' : 'libraries'})`);
+    } else {
+        setStepForm('plex');
+        if (status.plex_from_env) {
+            const urlInput = document.getElementById('setup-plex-url');
+            if (urlInput && !urlInput.value) urlInput.value = '';
+        }
+    }
+
+    // Step 2: AI
+    if (status.llm_configured) {
+        const providerLabel = {
+            gemini: 'Gemini', anthropic: 'Claude', openai: 'OpenAI',
+            ollama: 'Ollama', custom: 'Custom',
+        }[status.llm_provider] || status.llm_provider;
+        setStepDone('ai', `Using ${providerLabel}`);
+    } else {
+        setStepForm('ai');
+    }
+
+    // Step 3: Sync
+    if (status.library_synced && !status.is_syncing) {
+        setStepDone('sync', `${status.track_count.toLocaleString()} tracks synced`);
+    } else if (status.is_syncing) {
+        showSyncProgress(status);
+        startSetupSyncPolling();
+    } else if (status.plex_connected && status.llm_configured) {
+        // Auto-trigger sync
+        triggerSetupSync();
+    } else {
+        setStepForm('sync');
+        document.getElementById('setup-sync-waiting').classList.remove('hidden');
+        document.getElementById('setup-sync-progress-wrap').classList.add('hidden');
+    }
+
+    // Step 4: Get Started
+    const allDone = status.plex_connected && status.llm_configured &&
+        status.library_synced && !status.is_syncing;
+    const getStartedBtn = document.getElementById('setup-get-started-btn');
+    getStartedBtn.disabled = !allDone;
+    if (allDone) {
+        document.getElementById('setup-step-ready').classList.add('setup-step--done');
+        const num = document.querySelector('#setup-step-ready .setup-step-number');
+        if (num) num.textContent = '\u2713';
+    }
+}
+
+function setStepDone(stepName, text) {
+    const step = document.getElementById(`setup-step-${stepName}`);
+    const form = document.getElementById(`setup-${stepName}-form`);
+    const done = document.getElementById(`setup-${stepName}-done`);
+    const doneText = document.getElementById(`setup-${stepName}-done-text`);
+    step.classList.add('setup-step--done');
+    step.classList.remove('setup-step--error');
+    if (form) form.classList.add('hidden');
+    if (done) done.classList.remove('hidden');
+    if (doneText) doneText.textContent = text;
+    const num = step.querySelector('.setup-step-number');
+    if (num) num.textContent = '\u2713';
+}
+
+function setStepForm(stepName) {
+    const step = document.getElementById(`setup-step-${stepName}`);
+    const form = document.getElementById(`setup-${stepName}-form`);
+    const done = document.getElementById(`setup-${stepName}-done`);
+    step.classList.remove('setup-step--done', 'setup-step--error');
+    if (form) form.classList.remove('hidden');
+    if (done) done.classList.add('hidden');
+}
+
+function setStepError(stepName, msg) {
+    const step = document.getElementById(`setup-step-${stepName}`);
+    step.classList.add('setup-step--error');
+    step.classList.remove('setup-step--done');
+    const errorEl = document.getElementById(`setup-${stepName}-error`);
+    if (errorEl) {
+        errorEl.textContent = msg;
+        errorEl.classList.remove('hidden');
+    }
+}
+
+function clearStepError(stepName) {
+    const step = document.getElementById(`setup-step-${stepName}`);
+    step.classList.remove('setup-step--error');
+    const errorEl = document.getElementById(`setup-${stepName}-error`);
+    if (errorEl) errorEl.classList.add('hidden');
+}
+
+function showSyncProgress(status) {
+    setStepForm('sync');
+    document.getElementById('setup-sync-waiting').classList.add('hidden');
+    document.getElementById('setup-sync-progress-wrap').classList.remove('hidden');
+
+    if (status.sync_progress) {
+        const pct = status.sync_progress.total > 0
+            ? Math.round((status.sync_progress.current / status.sync_progress.total) * 100) : 0;
+        const fill = document.getElementById('setup-sync-progress-fill');
+        fill.style.width = `${pct}%`;
+        fill.parentElement.setAttribute('aria-valuenow', pct);
+        const phaseLabel = status.sync_progress.phase === 'fetching_albums'
+            ? 'Fetching albums' : status.sync_progress.phase === 'fetching'
+            ? 'Fetching tracks' : 'Processing';
+        document.getElementById('setup-sync-progress-text').textContent =
+            `${phaseLabel}: ${status.sync_progress.current.toLocaleString()} / ${status.sync_progress.total.toLocaleString()}`;
+        document.getElementById('setup-sync-message').textContent = 'Syncing your library...';
+    }
+}
+
+async function triggerSetupSync() {
+    try {
+        await apiCall('/library/sync', { method: 'POST' });
+    } catch (e) {
+        // May already be syncing (409) — that's fine
+        if (!e.message.includes('already in progress')) {
+            setStepError('sync', e.message);
+            return;
+        }
+    }
+    startSetupSyncPolling();
+}
+
+function startSetupSyncPolling() {
+    if (state.setup.syncPollInterval) return;
+    // Show progress immediately
+    document.getElementById('setup-sync-waiting').classList.add('hidden');
+    document.getElementById('setup-sync-progress-wrap').classList.remove('hidden');
+
+    state.setup.syncPollInterval = setInterval(async () => {
+        try {
+            const libStatus = await apiCall('/library/status');
+            if (libStatus.is_syncing) {
+                showSyncProgress({
+                    sync_progress: libStatus.sync_progress,
+                    is_syncing: true,
+                });
+            } else if (libStatus.track_count > 0) {
+                // Sync complete
+                clearInterval(state.setup.syncPollInterval);
+                state.setup.syncPollInterval = null;
+                setStepDone('sync', `${libStatus.track_count.toLocaleString()} tracks synced`);
+                // Update status and re-render step 4
+                state.setup.status.library_synced = true;
+                state.setup.status.track_count = libStatus.track_count;
+                state.setup.status.is_syncing = false;
+                renderSetupState(state.setup.status);
+            } else if (libStatus.error) {
+                clearInterval(state.setup.syncPollInterval);
+                state.setup.syncPollInterval = null;
+                setStepError('sync', libStatus.error);
+            }
+        } catch (e) {
+            // Network error — keep polling
+        }
+    }, 2000);
+}
+
+let _setupListenersAttached = false;
+
+function setupWizardEventListeners() {
+    if (_setupListenersAttached) return;
+    _setupListenersAttached = true;
+
+    // Plex validation
+    document.getElementById('setup-plex-btn').addEventListener('click', async () => {
+        const url = document.getElementById('setup-plex-url').value.trim();
+        const token = document.getElementById('setup-plex-token').value.trim();
+        const library = document.getElementById('setup-plex-library').value.trim() || 'Music';
+
+        if (!url || !token) {
+            setStepError('plex', 'URL and token are required');
+            return;
+        }
+
+        clearStepError('plex');
+        const btn = document.getElementById('setup-plex-btn');
+        btn.disabled = true;
+        btn.textContent = 'Connecting...';
+
+        try {
+            const result = await validatePlex(url, token, library);
+            if (result.success) {
+                state.setup.status.plex_connected = true;
+                state.setup.status.music_libraries = result.music_libraries || [];
+                setStepDone('plex', result.server_name
+                    ? `Connected to ${result.server_name}` : 'Connected to Plex');
+                // Auto-trigger sync if AI is also done
+                if (state.setup.status.llm_configured && !state.setup.status.library_synced) {
+                    state.setup.status.is_syncing = true;
+                    triggerSetupSync();
+                }
+                renderSetupState(state.setup.status);
+            } else {
+                setStepError('plex', result.error || 'Connection failed');
+            }
+        } catch (e) {
+            setStepError('plex', e.message);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Connect';
+        }
+    });
+
+    // AI provider dropdown change
+    document.getElementById('setup-ai-provider').addEventListener('change', () => {
+        const provider = document.getElementById('setup-ai-provider').value;
+        const keyGroup = document.getElementById('setup-ai-key-group');
+        const ollamaGroup = document.getElementById('setup-ai-ollama-group');
+        const customGroup = document.getElementById('setup-ai-custom-group');
+        const hintEl = document.getElementById('setup-ai-hint');
+
+        keyGroup.classList.toggle('hidden', provider === 'ollama' || provider === 'custom');
+        ollamaGroup.classList.toggle('hidden', provider !== 'ollama');
+        customGroup.classList.toggle('hidden', provider !== 'custom');
+        if (hintEl) hintEl.innerHTML = SETUP_AI_HINTS[provider] || '';
+    });
+
+    // AI validation
+    document.getElementById('setup-ai-btn').addEventListener('click', async () => {
+        const provider = document.getElementById('setup-ai-provider').value;
+        const apiKey = document.getElementById('setup-ai-key')?.value.trim() || '';
+        const ollamaUrl = document.getElementById('setup-ai-ollama-url')?.value.trim() || '';
+        const customUrl = document.getElementById('setup-ai-custom-url')?.value.trim() || '';
+
+        // Basic client-side validation
+        if (['gemini', 'anthropic', 'openai'].includes(provider) && !apiKey) {
+            setStepError('ai', 'API key is required');
+            return;
+        }
+        if (provider === 'custom' && !customUrl) {
+            setStepError('ai', 'API URL is required');
+            return;
+        }
+
+        clearStepError('ai');
+        const btn = document.getElementById('setup-ai-btn');
+        btn.disabled = true;
+        btn.textContent = 'Validating...';
+
+        try {
+            const result = await validateAI(provider, apiKey, ollamaUrl, customUrl);
+            if (result.success) {
+                state.setup.status.llm_configured = true;
+                state.setup.status.llm_provider = provider;
+                setStepDone('ai', `Using ${result.provider_name || provider}`);
+                // Auto-trigger sync if Plex is also done
+                if (state.setup.status.plex_connected && !state.setup.status.library_synced) {
+                    state.setup.status.is_syncing = true;
+                    triggerSetupSync();
+                }
+                renderSetupState(state.setup.status);
+            } else {
+                setStepError('ai', result.error || 'Validation failed');
+            }
+        } catch (e) {
+            setStepError('ai', e.message);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Validate';
+        }
+    });
+
+    // Get Started
+    document.getElementById('setup-get-started-btn').addEventListener('click', async () => {
+        await completeSetup();
+        exitSetupWizard();
+    });
+
+    // Skip Setup
+    document.getElementById('setup-skip-btn').addEventListener('click', () => {
+        exitSetupWizard();
+    });
+}
+
+
+// =============================================================================
 // Initialization
 // =============================================================================
 
@@ -5037,6 +5409,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Load initial config
     try {
         await loadSettings();
+
+        // Check setup wizard status (only on home view with no deep link)
+        const initHash = location.hash.slice(1);
+        if (state.view === 'home' && !initHash.startsWith('result/')) {
+            try {
+                const setupStatus = await fetchSetupStatus();
+                if (!setupStatus.setup_complete) {
+                    enterSetupWizard(setupStatus);
+                    return; // Wizard handles its own lifecycle
+                }
+            } catch (e) {
+                // Setup endpoint unavailable — skip wizard, continue normally
+                console.warn('Setup status check failed:', e);
+            }
+        }
 
         // Check library cache status after config is loaded
         if (state.config?.plex_connected) {

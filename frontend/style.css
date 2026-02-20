@@ -3405,3 +3405,228 @@ body.no-scroll {
         display: none;
     }
 }
+
+
+/* =============================================================================
+   Setup Wizard
+   ============================================================================= */
+
+.setup-wizard {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: var(--spacing-lg) var(--spacing-md);
+}
+
+.setup-header {
+    text-align: center;
+    margin-bottom: var(--spacing-xl);
+}
+
+.setup-title {
+    font-size: var(--font-size-2xl);
+    margin: 0 0 var(--spacing-sm);
+}
+
+.setup-subtitle {
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+/* Warning banner (data dir not writable) */
+.setup-warning {
+    background: rgba(233, 92, 89, 0.1);
+    border: 1px solid var(--error);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
+    display: flex;
+    gap: var(--spacing-md);
+    align-items: flex-start;
+}
+
+.setup-warning-icon {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--error);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: var(--font-size-sm);
+}
+
+.setup-warning-text strong {
+    display: block;
+    margin-bottom: var(--spacing-xs);
+}
+
+.setup-warning-text p {
+    margin: var(--spacing-xs) 0;
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+.setup-warning-fix {
+    font-family: monospace;
+    background: var(--bg-tertiary);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: var(--radius-sm);
+    word-break: break-all;
+}
+
+/* Step cards */
+.setup-step {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--spacing-md);
+    overflow: hidden;
+}
+
+.setup-step--done {
+    border-color: var(--success);
+}
+
+.setup-step--error {
+    border-color: var(--error);
+}
+
+.setup-step-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+}
+
+.setup-step-number {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: var(--font-size-sm);
+}
+
+.setup-step--done .setup-step-number {
+    background: var(--success);
+    color: #fff;
+}
+
+.setup-step--error .setup-step-number {
+    background: var(--error);
+    color: #fff;
+}
+
+.setup-step-title {
+    flex: 1;
+    min-width: 0;
+}
+
+.setup-step-title h3 {
+    margin: 0;
+    font-size: var(--font-size-base);
+}
+
+.setup-step-status {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
+.setup-step-body {
+    padding: 0 var(--spacing-md) var(--spacing-md);
+}
+
+.setup-step-body .form-group {
+    margin-bottom: var(--spacing-md);
+}
+
+.setup-step-body .btn-primary {
+    margin-top: var(--spacing-sm);
+}
+
+.setup-step-info {
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    margin: 0 0 var(--spacing-sm);
+}
+
+/* Done state inside a step */
+.setup-step-done {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-xs) 0;
+}
+
+.setup-done-icon {
+    color: var(--success);
+    font-size: var(--font-size-lg);
+    font-weight: 700;
+}
+
+.setup-done-text {
+    color: var(--success);
+    font-size: var(--font-size-sm);
+}
+
+/* Inline error */
+.setup-inline-error {
+    color: var(--error);
+    font-size: var(--font-size-sm);
+    padding: var(--spacing-xs) 0;
+}
+
+/* Field hints */
+.setup-field-hint {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    margin-top: var(--spacing-xs);
+}
+
+.setup-field-hint a {
+    color: var(--accent);
+}
+
+/* Footer */
+.setup-footer {
+    text-align: center;
+    margin-top: var(--spacing-lg);
+}
+
+.setup-skip-link {
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+}
+
+.setup-skip-link:hover {
+    color: var(--text-secondary);
+}
+
+/* Sync progress inside wizard (reuse existing bar styles) */
+#setup-sync-progress-wrap .sync-progress-bar {
+    margin: var(--spacing-sm) 0;
+}
+
+#setup-sync-progress-wrap .sync-progress-text {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+/* Mobile */
+@media (max-width: 600px) {
+    .setup-wizard {
+        padding: var(--spacing-md) var(--spacing-sm);
+    }
+    .setup-step-body {
+        padding: 0 var(--spacing-sm) var(--spacing-sm);
+    }
+}

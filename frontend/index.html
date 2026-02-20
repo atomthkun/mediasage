@@ -38,6 +38,148 @@
         <main class="main" id="main-content">
             <!-- Home View -->
             <div id="home-view" class="view">
+                <!-- Setup Wizard (shown on first launch) -->
+                <div id="setup-wizard" class="setup-wizard hidden">
+                    <div class="setup-header">
+                        <h2 class="setup-title">Welcome to MediaSage</h2>
+                        <p class="setup-subtitle">Let's get you set up. This should only take a minute.</p>
+                    </div>
+
+                    <!-- Data directory warning (blocking) -->
+                    <div id="setup-data-warning" class="setup-warning hidden" role="alert">
+                        <div class="setup-warning-icon" aria-hidden="true">!</div>
+                        <div class="setup-warning-text">
+                            <strong>Data directory is not writable</strong>
+                            <p>MediaSage cannot write to its data directory. This is usually a Docker volume permissions issue.</p>
+                            <p id="setup-data-fix" class="setup-warning-fix"></p>
+                        </div>
+                    </div>
+
+                    <!-- Step 1: Plex -->
+                    <div class="setup-step" id="setup-step-plex">
+                        <div class="setup-step-header">
+                            <span class="setup-step-number">1</span>
+                            <div class="setup-step-title">
+                                <h3>Connect to Plex</h3>
+                                <span class="setup-step-status" id="setup-plex-status"></span>
+                            </div>
+                        </div>
+                        <div class="setup-step-body" id="setup-plex-body">
+                            <div class="setup-step-form" id="setup-plex-form">
+                                <div class="form-group">
+                                    <label for="setup-plex-url">Plex Server URL</label>
+                                    <input type="text" id="setup-plex-url" placeholder="http://your-plex-server:32400">
+                                </div>
+                                <div class="form-group">
+                                    <label for="setup-plex-token">Plex Token</label>
+                                    <input type="password" id="setup-plex-token" placeholder="Your Plex token">
+                                    <p class="setup-field-hint">Find your token: <a href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/" target="_blank" rel="noopener">Plex support article</a></p>
+                                </div>
+                                <div class="form-group">
+                                    <label for="setup-plex-library">Music Library</label>
+                                    <input type="text" id="setup-plex-library" value="Music" placeholder="Music library name">
+                                </div>
+                                <div id="setup-plex-error" class="setup-inline-error hidden" role="alert"></div>
+                                <button id="setup-plex-btn" class="btn btn-primary">Connect</button>
+                            </div>
+                            <div class="setup-step-done hidden" id="setup-plex-done">
+                                <span class="setup-done-icon" aria-hidden="true">&#10003;</span>
+                                <span class="setup-done-text" id="setup-plex-done-text">Connected</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: AI Provider -->
+                    <div class="setup-step" id="setup-step-ai">
+                        <div class="setup-step-header">
+                            <span class="setup-step-number">2</span>
+                            <div class="setup-step-title">
+                                <h3>Configure AI Provider</h3>
+                                <span class="setup-step-status" id="setup-ai-status"></span>
+                            </div>
+                        </div>
+                        <div class="setup-step-body" id="setup-ai-body">
+                            <div class="setup-step-form" id="setup-ai-form">
+                                <div class="form-group">
+                                    <label for="setup-ai-provider">Provider</label>
+                                    <select id="setup-ai-provider">
+                                        <option value="gemini">Google Gemini</option>
+                                        <option value="anthropic">Anthropic (Claude)</option>
+                                        <option value="openai">OpenAI (GPT)</option>
+                                        <option value="ollama">Ollama (Local)</option>
+                                        <option value="custom">Custom (OpenAI-compatible)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" id="setup-ai-key-group">
+                                    <label for="setup-ai-key">API Key</label>
+                                    <input type="password" id="setup-ai-key" placeholder="Your API key">
+                                    <p class="setup-field-hint" id="setup-ai-hint">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></p>
+                                </div>
+                                <div class="form-group hidden" id="setup-ai-ollama-group">
+                                    <label for="setup-ai-ollama-url">Ollama URL</label>
+                                    <input type="text" id="setup-ai-ollama-url" placeholder="http://localhost:11434" value="http://localhost:11434">
+                                </div>
+                                <div class="form-group hidden" id="setup-ai-custom-group">
+                                    <label for="setup-ai-custom-url">API Base URL</label>
+                                    <input type="text" id="setup-ai-custom-url" placeholder="http://localhost:5000/v1">
+                                </div>
+                                <div id="setup-ai-error" class="setup-inline-error hidden" role="alert"></div>
+                                <button id="setup-ai-btn" class="btn btn-primary">Validate</button>
+                            </div>
+                            <div class="setup-step-done hidden" id="setup-ai-done">
+                                <span class="setup-done-icon" aria-hidden="true">&#10003;</span>
+                                <span class="setup-done-text" id="setup-ai-done-text">Configured</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: Library Sync -->
+                    <div class="setup-step" id="setup-step-sync">
+                        <div class="setup-step-header">
+                            <span class="setup-step-number">3</span>
+                            <div class="setup-step-title">
+                                <h3>Sync Your Library</h3>
+                                <span class="setup-step-status" id="setup-sync-status"></span>
+                            </div>
+                        </div>
+                        <div class="setup-step-body" id="setup-sync-body">
+                            <div class="setup-step-form" id="setup-sync-form">
+                                <div id="setup-sync-error" class="setup-inline-error hidden" role="alert"></div>
+                                <p class="setup-step-info" id="setup-sync-waiting">Complete steps 1 and 2 first.</p>
+                                <div id="setup-sync-progress-wrap" class="hidden">
+                                    <p class="setup-step-info" id="setup-sync-message">Syncing your library...</p>
+                                    <div class="sync-progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Library sync progress">
+                                        <div id="setup-sync-progress-fill" class="sync-progress-fill"></div>
+                                    </div>
+                                    <p id="setup-sync-progress-text" class="sync-progress-text">Starting...</p>
+                                </div>
+                            </div>
+                            <div class="setup-step-done hidden" id="setup-sync-done">
+                                <span class="setup-done-icon" aria-hidden="true">&#10003;</span>
+                                <span class="setup-done-text" id="setup-sync-done-text">Synced</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 4: Get Started -->
+                    <div class="setup-step" id="setup-step-ready">
+                        <div class="setup-step-header">
+                            <span class="setup-step-number">4</span>
+                            <div class="setup-step-title">
+                                <h3>You're all set!</h3>
+                                <span class="setup-step-status" id="setup-ready-status"></span>
+                            </div>
+                        </div>
+                        <div class="setup-step-body">
+                            <button id="setup-get-started-btn" class="btn btn-primary" disabled>Get Started</button>
+                        </div>
+                    </div>
+
+                    <div class="setup-footer">
+                        <button id="setup-skip-btn" class="btn-link setup-skip-link">Skip Setup</button>
+                    </div>
+                </div>
+
                 <div class="home-content">
                     <h2 class="home-greeting">What do you want to listen to?</h2>
                     <p class="home-subtitle">Create playlists and discover albums from your library.</p>

@@ -656,7 +656,7 @@ class RecommendSessionState(BaseModel):
 
     mode: Literal["library", "discovery"] = "library"
     prompt: str = ""
-    filters: dict = {}
+    filters: dict[str, list[str]] = {}
     questions: list[ClarifyingQuestion] = []
     answers: list[str | None] = []
     answer_texts: list[str] = []
@@ -790,3 +790,69 @@ class ResultDetail(BaseModel):
     subtitle: str | None = None
     created_at: str
     snapshot: dict
+
+
+# =============================================================================
+# Setup/Onboarding Models
+# =============================================================================
+
+
+class SetupStatusResponse(BaseModel):
+    """Full onboarding checklist state."""
+
+    data_dir_writable: bool
+    process_uid: int = 0
+    process_gid: int = 0
+    data_dir: str = ""
+    plex_connected: bool
+    plex_error: str | None = None
+    plex_from_env: bool = False
+    music_libraries: list[str] = []
+    llm_configured: bool
+    llm_provider: str = ""
+    llm_from_env: bool = False
+    library_synced: bool
+    track_count: int = 0
+    is_syncing: bool = False
+    sync_progress: SyncProgress | None = None
+    setup_complete: bool
+
+
+class ValidatePlexRequest(BaseModel):
+    """Request to validate Plex credentials during setup."""
+
+    plex_url: str
+    plex_token: str
+    music_library: str = "Music"
+
+
+class ValidatePlexResponse(BaseModel):
+    """Response from Plex validation."""
+
+    success: bool
+    error: str | None = None
+    server_name: str | None = None
+    music_libraries: list[str] = []
+
+
+class ValidateAIRequest(BaseModel):
+    """Request to validate AI provider credentials during setup."""
+
+    provider: str
+    api_key: str = ""
+    ollama_url: str = ""
+    custom_url: str = ""
+
+
+class ValidateAIResponse(BaseModel):
+    """Response from AI provider validation."""
+
+    success: bool
+    error: str | None = None
+    provider_name: str = ""
+
+
+class SetupCompleteResponse(BaseModel):
+    """Response from marking setup as complete."""
+
+    success: bool

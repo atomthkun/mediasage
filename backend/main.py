@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse
 from starlette.responses import StreamingResponse
 import httpx
 
-from backend.config import get_config, update_config_values, ConfigSaveError
+from backend.config import get_config, update_config_values, load_user_yaml_config, save_user_config, ConfigSaveError
 from backend.version import get_version
 from backend.models import (
     AlbumCandidate,
@@ -56,15 +56,21 @@ from backend.models import (
     ResultListResponse,
     SavePlaylistRequest,
     SavePlaylistResponse,
+    SetupCompleteResponse,
+    SetupStatusResponse,
     SyncProgress,
     SyncTriggerResponse,
     Track,
     UpdateConfigRequest,
     UpdatePlaylistRequest,
     UpdatePlaylistResponse,
+    ValidateAIRequest,
+    ValidateAIResponse,
+    ValidatePlexRequest,
+    ValidatePlexResponse,
     album_key,
 )
-from backend.plex_client import get_plex_client, init_plex_client
+from backend.plex_client import PlexClient as PlexClientInstance, get_plex_client, init_plex_client
 from backend import library_cache
 from backend.llm_client import (
     TOKENS_PER_ALBUM,
@@ -204,6 +210,213 @@ async def health_check() -> HealthResponse:
         plex_connected=plex_client.is_connected() if plex_client else False,
         llm_configured=_is_llm_configured(config),
     )
+
+
+# =============================================================================
+# Setup/Onboarding Endpoints
+# =============================================================================
+
+
+@app.get("/api/setup/status", response_model=SetupStatusResponse)
+async def setup_status() -> SetupStatusResponse:
+    """Get onboarding checklist state for the setup wizard."""
+    config = get_config()
+    plex_client = get_plex_client()
+
+    # Check data dir writable by actually creating+deleting a temp file
+    # (more reliable than os.access for Docker bind mounts)
+    data_dir = library_cache.DATA_DIR
+    data_dir_writable = False
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        test_file = data_dir / ".write_test"
+        test_file.write_text("test")
+        test_file.unlink()
+        data_dir_writable = True
+    except OSError:
+        pass
+
+    # Plex status
+    plex_connected = plex_client.is_connected() if plex_client else False
+    plex_error = plex_client.get_error() if plex_client and not plex_connected else None
+    music_libraries = plex_client.get_music_libraries() if plex_client and plex_connected else []
+
+    # LLM status
+    llm_configured = _is_llm_configured(config)
+    llm_from_env = any(
+        os.environ.get(k)
+        for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OLLAMA_URL", "CUSTOM_LLM_URL")
+    )
+
+    # Library cache status
+    library_synced = library_cache.has_cached_tracks()
+    sync_state = library_cache.get_sync_state()
+    sync_progress = None
+    if sync_state["sync_progress"]:
+        sync_progress = SyncProgress(
+            phase=sync_state["sync_progress"]["phase"],
+            current=sync_state["sync_progress"]["current"],
+            total=sync_state["sync_progress"]["total"],
+        )
+
+    # Setup complete flag
+    user_config = load_user_yaml_config()
+    setup_complete = user_config.get("setup", {}).get("complete", False)
+
+    return SetupStatusResponse(
+        data_dir_writable=data_dir_writable,
+        process_uid=getattr(os, "getuid", lambda: 0)(),
+        process_gid=getattr(os, "getgid", lambda: 0)(),
+        data_dir=str(data_dir),
+        plex_connected=plex_connected,
+        plex_error=plex_error,
+        plex_from_env=bool(os.environ.get("PLEX_URL")),
+        music_libraries=music_libraries,
+        llm_configured=llm_configured,
+        llm_provider=config.llm.provider,
+        llm_from_env=llm_from_env,
+        library_synced=library_synced,
+        track_count=sync_state["track_count"],
+        is_syncing=sync_state["is_syncing"],
+        sync_progress=sync_progress,
+        setup_complete=setup_complete,
+    )
+
+
+@app.post("/api/setup/validate-plex", response_model=ValidatePlexResponse)
+async def setup_validate_plex(request: ValidatePlexRequest) -> ValidatePlexResponse:
+    """Validate Plex credentials and save on success."""
+    try:
+        temp_client = await asyncio.to_thread(
+            PlexClientInstance, request.plex_url, request.plex_token, request.music_library
+        )
+    except Exception as e:
+        return ValidatePlexResponse(success=False, error=str(e))
+
+    if not temp_client.is_connected():
+        return ValidatePlexResponse(
+            success=False,
+            error=temp_client.get_error() or "Connection failed",
+        )
+
+    # Connected — save config and reinitialize global client
+    music_libraries = temp_client.get_music_libraries()
+    server_name = None
+    if temp_client._server:
+        server_name = temp_client._server.friendlyName
+
+    try:
+        update_config_values({
+            "plex_url": request.plex_url,
+            "plex_token": request.plex_token,
+            "music_library": request.music_library,
+        })
+    except ConfigSaveError as e:
+        return ValidatePlexResponse(success=False, error=str(e))
+
+    init_plex_client(request.plex_url, request.plex_token, request.music_library)
+
+    return ValidatePlexResponse(
+        success=True,
+        server_name=server_name,
+        music_libraries=music_libraries,
+    )
+
+
+@app.post("/api/setup/validate-ai", response_model=ValidateAIResponse)
+async def setup_validate_ai(request: ValidateAIRequest) -> ValidateAIResponse:
+    """Validate AI provider credentials and save on success."""
+    provider = request.provider
+    provider_name = {
+        "anthropic": "Anthropic (Claude)",
+        "openai": "OpenAI (GPT)",
+        "gemini": "Google (Gemini)",
+        "ollama": "Ollama (Local)",
+        "custom": "Custom (OpenAI-compatible)",
+    }.get(provider, provider)
+
+    try:
+        if provider == "gemini":
+            import google.genai as genai
+            client = genai.Client(api_key=request.api_key)
+            await asyncio.to_thread(lambda: list(client.models.list()))
+
+        elif provider == "openai":
+            import openai
+            client = openai.OpenAI(api_key=request.api_key)
+            await asyncio.to_thread(lambda: list(client.models.list()))
+
+        elif provider == "anthropic":
+            import anthropic
+            client = anthropic.Anthropic(api_key=request.api_key)
+            await asyncio.to_thread(
+                client.messages.create,
+                model="claude-haiku-4-5",
+                max_tokens=1,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        elif provider == "ollama":
+            status = await asyncio.to_thread(get_ollama_status, request.ollama_url or "http://localhost:11434")
+            if not status.connected:
+                return ValidateAIResponse(
+                    success=False,
+                    error=status.error or "Cannot connect to Ollama",
+                    provider_name=provider_name,
+                )
+
+        elif provider == "custom":
+            if not request.custom_url:
+                return ValidateAIResponse(
+                    success=False, error="Custom URL is required", provider_name=provider_name
+                )
+            headers = {}
+            if request.api_key:
+                headers["Authorization"] = f"Bearer {request.api_key}"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{request.custom_url.rstrip('/')}/models", headers=headers)
+                resp.raise_for_status()
+
+        else:
+            return ValidateAIResponse(
+                success=False, error=f"Unknown provider: {provider}", provider_name=provider_name
+            )
+
+    except Exception as e:
+        error_msg = str(e)
+        # Provide friendlier messages for common errors
+        if "401" in error_msg or "Unauthorized" in error_msg or "AuthenticationError" in error_msg:
+            error_msg = "Invalid API key"
+        elif "Could not resolve" in error_msg or "Connection" in error_msg.lower():
+            error_msg = f"Cannot connect to {provider_name}"
+        return ValidateAIResponse(success=False, error=error_msg, provider_name=provider_name)
+
+    # Save config
+    config_updates = {"llm_provider": provider}
+    if request.api_key:
+        config_updates["llm_api_key"] = request.api_key
+    if provider == "ollama" and request.ollama_url:
+        config_updates["ollama_url"] = request.ollama_url
+    if provider == "custom" and request.custom_url:
+        config_updates["custom_url"] = request.custom_url
+
+    try:
+        config = update_config_values(config_updates)
+        init_llm_client(config.llm)
+    except ConfigSaveError as e:
+        return ValidateAIResponse(success=False, error=str(e), provider_name=provider_name)
+
+    return ValidateAIResponse(success=True, provider_name=provider_name)
+
+
+@app.post("/api/setup/complete", response_model=SetupCompleteResponse)
+async def setup_complete() -> SetupCompleteResponse:
+    """Mark onboarding as complete."""
+    try:
+        save_user_config({"setup": {"complete": True}})
+    except Exception as e:
+        logger.warning("Failed to save setup complete flag: %s", e)
+    return SetupCompleteResponse(success=True)
 
 
 # =============================================================================
@@ -678,12 +891,12 @@ def _get_pipeline():
     llm_client = get_llm_client()
     if llm_client is None:
         return None
-    config = get_config()
     if _recommendation_pipeline is None or _recommendation_pipeline_llm is not llm_client:
         with _pipeline_lock:
             # Double-check inside lock
             if _recommendation_pipeline is None or _recommendation_pipeline_llm is not llm_client:
                 from backend.recommender import RecommendationPipeline
+                config = get_config()
                 old_pipeline = _recommendation_pipeline
                 _recommendation_pipeline = RecommendationPipeline(config, llm_client)
                 # Migrate active sessions from old pipeline to preserve in-flight requests
