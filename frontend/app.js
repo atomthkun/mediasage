@@ -1004,6 +1004,10 @@ function updateStep() {
     const appFooter = document.querySelector('.app-footer');
     if (appFooter) appFooter.classList.toggle('app-footer--results', isResults);
 
+    // Clear any inline hide from album view so CSS class can control visibility
+    const regenBtn = document.getElementById('regenerate-btn');
+    if (regenBtn) regenBtn.style.display = '';
+
     // Steps array is mode-dependent: prompt uses refine, seed uses dimensions
     const steps = state.mode === 'prompt'
         ? ['input', 'refine', 'filters', 'results']
@@ -4092,10 +4096,19 @@ function updateRecStep() {
     });
 
     // Hide progress bar on results
+    const isResults = state.rec.step === 'results';
     const recProgress = document.getElementById('rec-steps');
     if (recProgress) {
-        recProgress.style.display = state.rec.step === 'results' ? 'none' : '';
+        recProgress.style.display = isResults ? 'none' : '';
     }
+
+    // Toggle footer content for results vs other screens
+    const appFooter = document.querySelector('.app-footer');
+    if (appFooter) appFooter.classList.toggle('app-footer--results', isResults);
+
+    // Hide regenerate button — it's playlist-only
+    const regenBtn = document.getElementById('regenerate-btn');
+    if (regenBtn) regenBtn.style.display = 'none';
 }
 
 function setRecStep(step) {
@@ -4946,6 +4959,7 @@ function setupRecEventListeners() {
         }
         if (e.target.id === 'rec-start-over') {
             resetRecState();
+            history.replaceState(null, '', '#recommend-album');
         }
         if (e.target.id === 'rec-try-discovery') {
             handleRecSwitchToDiscovery();
@@ -4957,6 +4971,7 @@ function setupRecEventListeners() {
         dismissRecRestartModal();
         hideStepLoading();
         resetRecState();
+        history.replaceState(null, '', '#recommend-album');
     });
     document.getElementById('rec-restart-cancel')?.addEventListener('click', dismissRecRestartModal);
     document.getElementById('rec-restart-cancel-x')?.addEventListener('click', dismissRecRestartModal);
@@ -4966,6 +4981,7 @@ function setupRecEventListeners() {
         dismissPlaylistRestartModal();
         setLoading(false);
         resetPlaylistState();
+        history.replaceState(null, '', '#' + hashForCurrentState());
     });
     document.getElementById('playlist-restart-cancel')?.addEventListener('click', dismissPlaylistRestartModal);
     document.getElementById('playlist-restart-cancel-x')?.addEventListener('click', dismissPlaylistRestartModal);
