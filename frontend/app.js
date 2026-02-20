@@ -543,10 +543,12 @@ function navigateTo(view, mode) {
     if (mode) state.mode = mode;
     state.view = view;
     updateView();
-    // Reset wide layout when leaving a results view
+    // Reset results-specific layout when leaving a results view
     if (viewChanged) {
         const appEl = document.querySelector('.app');
         if (appEl) appEl.classList.remove('app--wide');
+        const appFooter = document.querySelector('.app-footer');
+        if (appFooter) appFooter.classList.remove('app-footer--results');
     }
     if (modeChanged) {
         state.step = 'input';
