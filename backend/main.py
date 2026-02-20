@@ -1594,10 +1594,9 @@ async def get_album_art(rating_key: str):
 
 
 # Allowlist of external art domains (Cover Art Archive CDN).
-# Tightened to coverartarchive.org + IA image servers (ia*.us.archive.org) only,
-# rather than all of archive.org.
-_EXTERNAL_ART_DOMAINS = {"coverartarchive.org"}
-_IA_IMAGE_SERVER_RE = re.compile(r"^ia\d+\.us\.archive\.org$")
+# Cover Art Archive redirects through archive.org to CDN servers like
+# dn710808.ca.archive.org or ia800123.us.archive.org — allow any subdomain.
+_EXTERNAL_ART_DOMAINS = {"coverartarchive.org", "archive.org"}
 
 
 @app.get("/api/external-art")
@@ -1610,10 +1609,7 @@ async def get_external_art(url: str = Query(...)):
     if parsed.scheme != "https":
         raise HTTPException(status_code=400, detail="Only HTTPS URLs allowed")
     hostname = parsed.hostname or ""
-    allowed = (
-        any(hostname == d or hostname.endswith(f".{d}") for d in _EXTERNAL_ART_DOMAINS)
-        or bool(_IA_IMAGE_SERVER_RE.match(hostname))
-    )
+    allowed = any(hostname == d or hostname.endswith(f".{d}") for d in _EXTERNAL_ART_DOMAINS)
     if not allowed:
         raise HTTPException(status_code=400, detail="Domain not allowed")
 
@@ -1637,10 +1633,7 @@ async def get_external_art(url: str = Query(...)):
                 redir_host = redirect_parsed.hostname or ""
                 redir_allowed = (
                     redirect_parsed.scheme == "https"
-                    and (
-                        any(redir_host == d or redir_host.endswith(f".{d}") for d in _EXTERNAL_ART_DOMAINS)
-                        or bool(_IA_IMAGE_SERVER_RE.match(redir_host))
-                    )
+                    and any(redir_host == d or redir_host.endswith(f".{d}") for d in _EXTERNAL_ART_DOMAINS)
                 )
                 if not redir_allowed:
                     break  # Redirect to disallowed domain
