@@ -380,7 +380,9 @@ async def search_library(q: str = Query(..., description="Search query")) -> lis
     if not plex_client or not plex_client.is_connected():
         raise HTTPException(status_code=503, detail="Plex not connected")
 
-    return await asyncio.to_thread(plex_client.search_tracks, q)
+    # Normalize smart/curly quotes to straight quotes (iOS auto-correction)
+    normalized = q.replace("\u2018", "'").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
+    return await asyncio.to_thread(plex_client.search_tracks, normalized)
 
 
 # =============================================================================
