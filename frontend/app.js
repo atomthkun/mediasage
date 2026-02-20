@@ -2408,7 +2408,13 @@ function setupEventListeners() {
                 const isCurrentMode = (hash === 'playlist-prompt' && state.mode === 'prompt') ||
                                       (hash === 'playlist-seed' && state.mode === 'seed');
                 if (isCurrentMode && (state.step !== 'input' || state.loading)) {
-                    openPlaylistRestartModal();
+                    if (state.step === 'results') {
+                        // Results page — playlist already generated, nothing to lose
+                        resetPlaylistState();
+                        location.hash = '#' + hash;
+                    } else {
+                        openPlaylistRestartModal();
+                    }
                     return;
                 }
             }
